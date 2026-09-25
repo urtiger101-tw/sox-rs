@@ -1,6 +1,9 @@
 mod audio;
 mod cli;
+mod codecs;
+mod device;
 mod effects;
+mod encode;
 mod io;
 mod mix;
 mod parse;
@@ -37,6 +40,9 @@ fn run() -> Result<()> {
     match cli.command {
         Commands::Info(args) => run_info(args),
         Commands::Formats => run_formats(),
+        Commands::Devices => device::list_devices(),
+        Commands::Play(args) => device::play_file(args),
+        Commands::Record(args) => device::record_file(args),
         Commands::Convert(args) => run_convert(args),
         Commands::Concat(args) => run_concat(args),
         Commands::Mix(args) => run_mix(args),
@@ -48,9 +54,26 @@ fn run() -> Result<()> {
 }
 
 fn run_formats() -> Result<()> {
-    println!("read: wav, flac, mp3, ogg/vorbis, opus, aac, alac, caf, mkv/webm, mp4/m4a");
-    println!("write: wav (16-bit PCM)");
+    println!(
+        "read: wav (PCM, float, IMA/MS ADPCM), gsm (GSM 06.10), amr/awb (AMR-NB/WB), wv (WavPack v5 mono/stereo), aiff, au/snd, raw, flac, mp3, ogg/vorbis, opus, aac, alac, caf, mkv/webm, mp4/m4a"
+    );
+    println!(
+        "write: wav (pcm8/16/24/32, float32/64, ima-adpcm, ms-adpcm), gsm (GSM 06.10), amr (AMR-NB), awb (AMR-WB), wv (WavPack v5 mono/stereo float), aiff, flac, mp3, ogg/vorbis, aac/adts, au/snd, raw"
+    );
+    println!("wav: 16-bit PCM by default; convert --bits 8/16/24/32, or --bits 32/64 --float");
+    println!(
+        "wav ADPCM: convert INPUT OUTPUT.wav --wav-adpcm ima|ms; GSM is 8 kHz mono; AMR-NB/WB uses .amr/.awb"
+    );
+    println!(
+        "codec limits: MP3 mono/stereo; Vorbis 1-2 channels at 44100/48000 Hz; AAC up to 6 channels"
+    );
     println!("stream: wav -> wav for gain, fade, and limiter without loading the full file");
+    println!(
+        "device: devices, multi-file play, repeat play, and finite/continuous WAV record use CPAL; select device, rate, and channels where supported"
+    );
+    println!(
+        "effects: gain, normalize, trim, fade, reverse, speed, stretch, tempo, dither, compand, reverb, pad, silence, lowpass, highpass, bass, treble, allpass, bandpass, bandreject, equalizer, echo, tremolo, delay, dcshift, downsample, upsample, repeat, swap, limiter, rate, channels, stat"
+    );
     Ok(())
 }
 
@@ -75,7 +98,36 @@ fn run_info(args: InfoArgs) -> Result<()> {
 
 fn run_convert(args: ConvertArgs) -> Result<()> {
     let chain = args.effect_chain()?;
-    io::convert_one(&args.input, &args.output, &chain, args.stat_json)
+    let mut audio = AudioBuffer::read_with_raw_options(
+        &args.input,
+        args.input_raw_rate,
+        args.input_raw_channels,
+        args.input_raw_encoding,
+    )
+    .with_context(|| format!("failed to read {}", args.input.display()))?;
+    chain.apply(&mut audio)?;
+    encode::write_audio_with_options(
+        &audio,
+        &args.output,
+        encode::EncodeOptions {
+            wav_bits: args.bits,
+            wav_float: args.float,
+            wav_adpcm: args.wav_adpcm,
+            aiff_bits: args.aiff_bits,
+            bitrate_kbps: args.bitrate_kbps,
+            au_encoding: args.au_encoding,
+            raw_encoding: args.output_raw_encoding,
+        },
+    )?;
+    if args.stat_json || chain.wants_stats() {
+        let report = stats::Report::from_audio(&args.output, &audio);
+        if args.stat_json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!("{report}");
+        }
+    }
+    Ok(())
 }
 
 fn run_concat(args: ConcatArgs) -> Result<()> {

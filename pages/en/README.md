@@ -1,23 +1,21 @@
-# sox — A Rust-first, SoX-inspired Audio Processor
+# soundx — A Rust-first, SoX-inspired Audio Processor
 
-**Pure Rust · No C dependencies · SoX-compatible CLI**
+**Rust-native codecs and DSP · SoX-style CLI**
 
-`sox` (rust-sox) is a from-scratch Rust rewrite of the classic [SoX](http://sox.sourceforge.net/)
-(Sound eXchange) command-line audio tool. It prioritises safety, portability, and
-a clean codebase over absolute feature parity — starting with a WAV processing
-core and expanding outward through the [Symphonia](https://github.com/pdeljanov/Symphonia)
-ecosystem for broader codec support.
+`soundx` is a Rust-native audio processor with a SoX-style command line. It aims
+to implement SoX format, effect, and device compatibility incrementally; it is
+currently a subset and is not fully SoX-compatible.
 
-> **Status:** Active development — Milestone 1 complete.  
-> Ready for everyday audio processing tasks.
+> **Status:** Active development. Some codecs, effects, parameters, and device
+> behaviors supported by SoX are still missing.
 
 ---
 
 ## Why sox?
 
-- **No C dependencies** — pure Rust audio processing. Easier to build, audit, and contribute to.
+- **Rust-native DSP and codecs** — system audio I/O uses the host backend through CPAL.
 - **Deterministic pipeline** — all effects operate on an interleaved `f32` sample buffer, making the signal path predictable and testable.
-- **SoX-compatible CLI** — familiar `input output effect...` syntax for common workflows. Also supports subcommands.
+- **SoX-style CLI subset** — familiar `input output effect...` syntax for implemented workflows, plus subcommands.
 - **Streaming** — process large files incrementally without loading everything into memory.
 - **JSON plans** — repeatable, scriptable processing plans.
 - **Parallel batch** — multi-core batch conversion with a single command.
@@ -28,47 +26,58 @@ ecosystem for broader codec support.
 ## Quick Start
 
 ```bash
-# Install via cargo
-cargo install rust-sox
-
-# Or build from source
+# Build from source
 git clone https://github.com/stevenke1981/sox-rs.git
 cd sox-rs
 cargo build --release
-./target/release/sox --help
+./target/release/soundx --help
+# Or install into Cargo's bin directory
+cargo install --path .
 ```
 
 ```bash
 # Info
-sox info input.wav
-sox info --json input.wav
+soundx info input.wav
+soundx info --json input.wav
 
 # Basic conversion with effects
-sox convert input.wav out.wav --gain-db -3 --trim 0 10 --normalize
+soundx convert input.wav out.wav --gain-db -3 --trim 0 10 --normalize
 
 # SoX-style legacy syntax
-sox input.wav out.wav gain -3 trim 0 10 norm rate 48000 stat
+soundx input.wav out.wav gain -3 trim 0 10 norm rate 48000 stat
 
 # Concatenate
-sox concat -o album.wav intro.wav body.wav outro.wav
+soundx concat -o album.wav intro.wav body.wav outro.wav
 
 # Mix
-sox mix -o bed.wav voice.wav music.wav --normalize
+soundx mix -o bed.wav voice.wav music.wav --normalize
 
 # Synthesis
-sox synth tone.wav --duration 2 --freq 440 --waveform sine --fade 0.05
+soundx synth tone.wav --duration 2 --freq 440 --waveform sine --fade 0.05
 
 # Streaming (low-memory large file processing)
-sox stream huge.wav processed.wav --gain-db=-3 --fade-in 0.5 --fade-out 0.5
+soundx stream huge.wav processed.wav --gain-db=-3 --fade-in 0.5 --fade-out 0.5
 
 # List supported codecs
-sox formats
+soundx formats
 
 # Parallel batch
-sox batch "samples/*.wav" --out-dir out --normalize --rate 48000
+soundx batch "samples/*.wav" --out-dir out --normalize --rate 48000
 
 # Run from a JSON plan
-sox run-plan plan.json
+soundx run-plan plan.json
+
+# List devices, play a file, and record for a fixed duration
+soundx devices
+soundx play intro.wav chapter1.wav chapter2.wav --loop
+soundx record take.wav --duration 10
+soundx record live.wav --continuous
+
+# Additional native Rust codecs
+soundx convert input.wav speech.gsm
+soundx convert input.wav speech.amr
+soundx convert input.wav speech-wide.awb
+soundx convert input.wav lossless.wv
 ```
 
 ---
@@ -81,17 +90,20 @@ Download from [GitHub Releases](https://github.com/stevenke1981/sox-rs/releases)
 
 | Platform | Package | Binary |
 |----------|---------|--------|
-| Windows x86_64 | `sox-<version>-win64.zip` | `sox.exe` |
-| Linux x86_64 | `sox-<version>-linux.tar.gz` | `sox` |
-| macOS x86_64 | `sox-<version>-macos.tar.gz` | `sox` |
+| Windows x86_64 | `soundx-<version>-setup.exe` (installer) or `soundx-<version>-x86_64-pc-windows-msvc.zip` | `soundx.exe` |
+| Linux x86_64 | `soundx-<version>-linux.tar.gz` | `soundx` |
+| macOS x86_64 | `soundx-<version>-macos.tar.gz` | `soundx` |
+
+The Windows installer adds its installation folder to the current user's `PATH`
+by default. Open a new terminal after installation, then run `soundx --version`.
 
 ### From source
 
 ```bash
-cargo install rust-sox
+cargo install --path .
 # or
 cargo build --release
-# binary at target/release/sox (or sox.exe on Windows)
+# binary at target/release/soundx (or soundx.exe on Windows)
 ```
 
 ---
@@ -106,10 +118,24 @@ cargo build --release
 | `fade` | `fade <in-sec> [out-sec]` | Linear fade in/out |
 | `reverse` | `reverse` | Reverse samples in place |
 | `speed` | `speed <factor>` | Change playback speed (resamples) |
+| `stretch` / `tempo` | `stretch <factor>` / `tempo [-q|-m|-s|-l] <factor>` | WSOLA time change with approximate pitch preservation |
+| `dither` | `dither [bits]` | Deterministic TPDF dither and quantization |
+| `compand` | `compand attack,decay,... transfer-points [gain [initial-volume [delay]]]` | Envelope-controlled dynamic range processing |
+| `reverb` | `reverb [-w] [reverberance [HF-damping [room-scale ...]]]` | Freeverb-style room effect with optional wet-only output |
 | `pad` | `pad <start-sec> [end-sec]` | Add silence at beginning and/or end |
 | `silence` | `silence <threshold-db> [min-sec]` | Remove leading/trailing silence |
-| `lowpass` | `lowpass <hz>` | Low-pass filter (first-order) |
-| `highpass` | `highpass <hz>` | High-pass filter (first-order) |
+| `lowpass` | `lowpass [-1|-2] <hz> [width[q|o|h|k]]` | First- or second-order low-pass filter |
+| `highpass` | `highpass [-1|-2] <hz> [width[q|o|h|k]]` | First- or second-order high-pass filter |
+| `bass` / `treble` | `bass|treble <gain-db> [hz [width[s|h|k|q|o]]]` | Low- and high-shelf tone filters |
+| `allpass` / `bandpass` / `bandreject` | `<effect> <hz> <width[h|k|q|o]>` | Two-pole all-pass, band-pass, and band-reject filters |
+| `equalizer` | `equalizer <hz> <width[q|o|h|k]> <gain-db>` | Two-pole parametric peak EQ |
+| `echo` | `echo <gain-in> <gain-out> <delay-ms> <decay> [...]` | Add one or more delay taps |
+| `tremolo` | `tremolo <speed-hz> [depth-percent]` | Sinusoidal amplitude modulation |
+| `delay` | `delay <position-sec> [...]` | Delay all channels or specify channel positions |
+| `dcshift` | `dcshift <shift> [limitergain]` | Add or remove DC offset |
+| `downsample` / `upsample` | `[factor (default 2)]` | Drop samples or insert zero samples and adjust rate |
+| `repeat` | `repeat [count (default 1)]` | Repeat the complete input |
+| `swap` | `swap` | Swap the first two channels |
 | `limiter` | `limiter [threshold]` | Hard limiter (default 0.95) |
 | `rate` | `rate <hz>` | Resample to a new sample rate |
 | `channels` | `channels <count>` | Convert channel count |
@@ -124,22 +150,31 @@ cargo build --release
 
 | Direction | Formats |
 |-----------|---------|
-| **Read** | WAV, FLAC, MP3, Ogg/Vorbis, Opus, AAC, ALAC, CAF, MKV/WebM, M4A |
-| **Write** | WAV (16-bit PCM) |
+| **Read** | WAV (PCM/float, IMA/MS ADPCM), GSM 06.10, AMR-NB/WB, WavPack v5, AIFF, AU/SND, RAW, FLAC, MP3, Ogg/Vorbis, Opus, AAC, ALAC, CAF, MKV/WebM, M4A |
+| **Write** | WAV (PCM/float, IMA/MS ADPCM), GSM 06.10, AMR-NB/WB, WavPack v5, FLAC, MP3, Ogg/Vorbis, AAC/ADTS, AIFF, AU/SND, RAW |
 | **Stream** | WAV → WAV (gain, fade, limiter only) |
+| **Devices** | List host devices, multi-file and repeat playback, duration-limited or continuous WAV recording, select device/rate/channels |
+
+WavPack currently supports lossless v5 mono/stereo. GSM and AMR use mono speech frames. Multi-file playback buffers the playlist in memory; continuous recording writes 16-bit WAV through a bounded queue. This remains a SoX-style subset; see the [compatibility matrix](../../docs/SOX_COMPATIBILITY.md) for codec/effect limits. Recording needs an available input device and OS permission.
+
+RAW input needs `convert --input-raw-rate HZ --input-raw-channels N`; its default encoding is `pcm-s16le`. RAW output accepts `--output-raw-encoding` and defaults to the same encoding. AU/SND encoding can be selected with `convert --au-encoding pcm8|pcm16|pcm24|pcm32|float32|float64|mu-law|a-law`; the default is 16-bit PCM.
+AIFF defaults to 16-bit PCM; select 8, 16, 24, or 32 bits with `convert --aiff-bits`.
 
 ---
 
 ## Project Layout
 
 ```
-sox/                       # crate root
+soundx/                    # crate root
 ├── Cargo.toml
 ├── README.md
 ├── src/
 │   ├── main.rs            # Entry point, command dispatch
 │   ├── cli.rs             # Clap argument definitions
-│   ├── audio.rs           # AudioBuffer, WAV/Symphonia I/O
+│   ├── audio.rs           # AudioBuffer, WAV/AU/RAW and Symphonia input
+│   ├── encode.rs          # Container and audio encoders
+│   ├── codecs.rs          # ADPCM, GSM, AMR, and WavPack codecs
+│   ├── device.rs          # Device listing, playback, timed/continuous recording
 │   ├── effects.rs         # Effect enum, EffectChain, DSP
 │   ├── parse.rs           # Effect token parser
 │   ├── io.rs              # File I/O utilities
@@ -149,8 +184,8 @@ sox/                       # crate root
 │   ├── stats.rs           # Audio statistics
 │   └── util.rs            # Shared utility functions
 ├── tests/
-│   ├── cli.rs             # Integration tests (8)
-│   ├── effects.rs         # Effect unit tests (65)
+│   ├── cli.rs             # CLI integration tests
+│   ├── effects.rs         # Effect unit tests
 │   └── common/mod.rs      # Test helpers
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -172,11 +207,11 @@ cargo build
 # Release build
 cargo build --release
 
-# binary at target/release/sox (or sox.exe)
-./target/release/sox --help
+# binary at target/release/soundx (or soundx.exe)
+./target/release/soundx --help
 ```
 
-**Prerequisites:** [Rust](https://www.rust-lang.org/tools/install) 1.85+
+**Prerequisites:** [Rust](https://www.rust-lang.org/tools/install) 1.94.1 (pinned by `rust-toolchain.toml`; the AMR dependency requires Rust 1.91+).
 
 ---
 

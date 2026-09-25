@@ -1,5 +1,6 @@
 use crate::audio::AudioBuffer;
 use crate::effects::EffectChain;
+use crate::encode;
 use crate::stats;
 use anyhow::{Context, Result};
 use glob::glob;
@@ -26,9 +27,7 @@ pub fn write_output(
     print_stats: bool,
     stat_json: bool,
 ) -> Result<()> {
-    audio
-        .write_wav(output)
-        .with_context(|| format!("failed to write {}", output.display()))?;
+    encode::write_audio(audio, output, None, false, 192)?;
 
     if print_stats {
         let report = stats::Report::from_audio(output, audio);

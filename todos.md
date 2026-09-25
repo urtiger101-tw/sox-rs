@@ -1,4 +1,4 @@
-# rust-sox 優化改善清單
+# soundx 優化改善清單
 
 > 基於 CBM 架構分析與原始碼審查結果，按優先級排列。
 
@@ -105,11 +105,10 @@
 
 ## P2 — 品質與 DX
 
-### [P2] 新增 `rust-toolchain.toml`
+### [完成] 固定 `rust-toolchain.toml`
 
-- **問題**: Rust edition 2024 需要 Rust 1.85+，但無鎖定 toolchain 版本。
-- **建議**: 新增 `rust-toolchain.toml` 鎖定 `1.94.1` (目前已安裝)。
-- **驗證**: `cargo build` 在不同環境使用正確的 toolchain。
+- **完成**: `rust-toolchain.toml` 固定 Rust `1.94.1`，`Cargo.toml` 宣告 `1.91` MSRV。
+- **驗證**: `cargo test --locked --all-targets`、`cargo clippy --locked --all-targets -- -D warnings` 及 release build 通過。
 
 ### [P2] 降低 symphonia 編譯負擔
 
@@ -118,10 +117,9 @@
 - **建議**: 僅啟用需要的 features: `["flac", "mp3", "vorbis", "opus"]`，或設為 feature gate。
 - **驗證**: `cargo build` 成功，支援的格式仍然可讀。
 
-### [P2] 新增 CI 配置
+### [完成] 新增 CI 配置
 
-- **問題**: 無 GitHub Actions 或其他 CI 設定。
-- **建議**: 新增 `.github/workflows/ci.yml`：
+- **完成**: `.github/workflows/ci.yml` 已加入 Windows、Ubuntu 與 macOS 工作：
   - `cargo build` (Windows + Ubuntu + macOS)
   - `cargo test`
   - `cargo clippy`
@@ -146,15 +144,12 @@
 
 ## P3 — 新增功能
 
-### [P3] 遺漏的 SoX 效果
+### [P3] 尚未實作的 SoX 效果
 
 - **建議新增**:
-  - `compand` — 動態範圍壓縮
-  - `echo` / `delay` — 回音 / 延遲
-  - `reverb` — 殘響
   - `phaser` / `flanger` — 相位 / 鑲邊效果
-  - `tempo` — 不變調速
   - `pitch` — 音高偏移（不變速度）
+- **已完成子集**: `dither`、`compand`、`reverb`、`stretch`、`tempo`、`echo`、`delay` 已有實作與測試。
 - **驗證**: 與 SoX 輸出進行 golden 測試比對。
 
 ### [P3] `--guard` Clipping 保護

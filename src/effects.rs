@@ -1,6 +1,48 @@
 use crate::audio::AudioBuffer;
 use crate::util::seconds_to_frames;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+
+#[derive(Debug, Clone, Copy)]
+pub enum BiquadKind {
+    LowPass,
+    HighPass,
+    BandPass,
+    BandPassConstantSkirt,
+    BandReject,
+    AllPass,
+    LowShelf,
+    HighShelf,
+    Equalizer,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FilterWidth {
+    Hertz(f32),
+    Kilohertz(f32),
+    HertzNoWarp(f32),
+    Octaves(f32),
+    Q(f32),
+    Slope(f32),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TempoQuality {
+    Quick,
+    Music,
+    Speech,
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReverbParameters {
+    wet_only: bool,
+    reverberance: f32,
+    hf_damping: f32,
+    room_scale: f32,
+    stereo_depth: f32,
+    pre_delay_ms: f32,
+    wet_gain_db: f32,
+}
 
 #[derive(Debug, Clone)]
 pub enum Effect {
@@ -20,6 +62,39 @@ pub enum Effect {
     Speed {
         factor: f32,
     },
+    Stretch {
+        factor: f32,
+        window_ms: f32,
+        search_ms: f32,
+        overlap_ms: f32,
+    },
+    Tempo {
+        factor: f32,
+        quality: TempoQuality,
+        segment_ms: f32,
+        search_ms: f32,
+        overlap_ms: f32,
+    },
+    Dither {
+        bits: u16,
+    },
+    Compand {
+        attack_decay: Vec<(f32, f32)>,
+        transfer_points: Vec<(f32, f32)>,
+        knee_db: f32,
+        gain_db: f32,
+        initial_volume_db: f32,
+        delay_sec: f32,
+    },
+    Reverb {
+        wet_only: bool,
+        reverberance: f32,
+        hf_damping: f32,
+        room_scale: f32,
+        stereo_depth: f32,
+        pre_delay_ms: f32,
+        wet_gain_db: f32,
+    },
     Pad {
         start_sec: f32,
         end_sec: f32,
@@ -34,6 +109,39 @@ pub enum Effect {
     HighPass {
         hz: f32,
     },
+    BiquadFilter {
+        kind: BiquadKind,
+        hz: f32,
+        width: FilterWidth,
+        gain_db: f32,
+        poles: u8,
+    },
+    Echo {
+        input_gain: f32,
+        output_gain: f32,
+        taps_ms: Vec<(f32, f32)>,
+    },
+    Tremolo {
+        speed_hz: f32,
+        depth_percent: f32,
+    },
+    Delay {
+        delays_sec: Vec<f32>,
+    },
+    DcShift {
+        shift: f32,
+        limiter_gain: Option<f32>,
+    },
+    Downsample {
+        factor: u32,
+    },
+    Upsample {
+        factor: u32,
+    },
+    Repeat {
+        count: u32,
+    },
+    Swap,
     Limiter {
         threshold: f32,
     },
@@ -72,26 +180,109 @@ impl EffectChain {
 
     pub fn apply(&self, audio: &mut AudioBuffer) -> Result<()> {
         for effect in &self.effects {
-            match *effect {
-                Effect::GainDb(db) => gain_db(audio, db),
-                Effect::Normalize { target_db } => normalize(audio, target_db),
+            match effect {
+                Effect::GainDb(db) => gain_db(audio, *db),
+                Effect::Normalize { target_db } => normalize(audio, *target_db),
                 Effect::Trim {
                     start_sec,
                     duration_sec,
-                } => trim(audio, start_sec, duration_sec)?,
-                Effect::Fade { in_sec, out_sec } => fade(audio, in_sec, out_sec)?,
+                } => trim(audio, *start_sec, *duration_sec)?,
+                Effect::Fade { in_sec, out_sec } => fade(audio, *in_sec, *out_sec)?,
                 Effect::Reverse => reverse(audio),
-                Effect::Speed { factor } => speed(audio, factor)?,
-                Effect::Pad { start_sec, end_sec } => pad(audio, start_sec, end_sec)?,
+                Effect::Speed { factor } => speed(audio, *factor)?,
+                Effect::Stretch {
+                    factor,
+                    window_ms,
+                    search_ms,
+                    overlap_ms,
+                } => wsola(audio, *factor, *window_ms, *search_ms, *overlap_ms)?,
+                Effect::Tempo {
+                    factor,
+                    quality,
+                    segment_ms,
+                    search_ms,
+                    overlap_ms,
+                } => {
+                    let tuned_segment = match quality {
+                        TempoQuality::Quick => (*segment_ms).min(40.0),
+                        TempoQuality::Music => *segment_ms,
+                        TempoQuality::Speech => (*segment_ms).min(60.0),
+                        TempoQuality::Linear => (*segment_ms).min(30.0),
+                    };
+                    wsola(audio, 1.0 / *factor, tuned_segment, *search_ms, *overlap_ms)?;
+                }
+                Effect::Dither { bits } => dither(audio, *bits)?,
+                Effect::Compand {
+                    attack_decay,
+                    transfer_points,
+                    knee_db,
+                    gain_db,
+                    initial_volume_db,
+                    delay_sec,
+                } => compand(
+                    audio,
+                    attack_decay,
+                    transfer_points,
+                    *knee_db,
+                    *gain_db,
+                    *initial_volume_db,
+                    *delay_sec,
+                )?,
+                Effect::Reverb {
+                    wet_only,
+                    reverberance,
+                    hf_damping,
+                    room_scale,
+                    stereo_depth,
+                    pre_delay_ms,
+                    wet_gain_db,
+                } => reverb(
+                    audio,
+                    ReverbParameters {
+                        wet_only: *wet_only,
+                        reverberance: *reverberance,
+                        hf_damping: *hf_damping,
+                        room_scale: *room_scale,
+                        stereo_depth: *stereo_depth,
+                        pre_delay_ms: *pre_delay_ms,
+                        wet_gain_db: *wet_gain_db,
+                    },
+                )?,
+                Effect::Pad { start_sec, end_sec } => pad(audio, *start_sec, *end_sec)?,
                 Effect::Silence {
                     threshold_db,
                     min_duration_sec,
-                } => trim_silence(audio, threshold_db, min_duration_sec)?,
-                Effect::LowPass { hz } => lowpass(audio, hz)?,
-                Effect::HighPass { hz } => highpass(audio, hz)?,
-                Effect::Limiter { threshold } => limiter(audio, threshold)?,
-                Effect::Rate { sample_rate } => rate(audio, sample_rate)?,
-                Effect::Channels { channels } => convert_channels(audio, channels)?,
+                } => trim_silence(audio, *threshold_db, *min_duration_sec)?,
+                Effect::LowPass { hz } => lowpass(audio, *hz)?,
+                Effect::HighPass { hz } => highpass(audio, *hz)?,
+                Effect::BiquadFilter {
+                    kind,
+                    hz,
+                    width,
+                    gain_db,
+                    poles,
+                } => biquad_filter(audio, *kind, *hz, *width, *gain_db, *poles)?,
+                Effect::Echo {
+                    input_gain,
+                    output_gain,
+                    taps_ms,
+                } => echo(audio, *input_gain, *output_gain, taps_ms)?,
+                Effect::Tremolo {
+                    speed_hz,
+                    depth_percent,
+                } => tremolo(audio, *speed_hz, *depth_percent)?,
+                Effect::Delay { delays_sec } => delay(audio, delays_sec)?,
+                Effect::DcShift {
+                    shift,
+                    limiter_gain,
+                } => dcshift(audio, *shift, *limiter_gain)?,
+                Effect::Downsample { factor } => downsample(audio, *factor)?,
+                Effect::Upsample { factor } => upsample(audio, *factor)?,
+                Effect::Repeat { count } => repeat(audio, *count)?,
+                Effect::Swap => swap(audio)?,
+                Effect::Limiter { threshold } => limiter(audio, *threshold)?,
+                Effect::Rate { sample_rate } => rate(audio, *sample_rate)?,
+                Effect::Channels { channels } => convert_channels(audio, *channels)?,
                 Effect::Stats => {}
             }
         }
@@ -122,6 +313,447 @@ fn normalize(audio: &mut AudioBuffer, target_db: f32) {
     for sample in &mut audio.samples {
         *sample *= factor;
     }
+}
+
+fn dither(audio: &mut AudioBuffer, bits: u16) -> Result<()> {
+    if !(2..=32).contains(&bits) {
+        bail!("dither precision must be between 2 and 32 bits");
+    }
+    let scale = 2_f64.powi(i32::from(bits) - 1);
+    let max = scale - 1.0;
+    let mut random = 0x9e37_79b9_7f4a_7c15_u64;
+    for sample in &mut audio.samples {
+        if !sample.is_finite() {
+            bail!("dither requires finite samples");
+        }
+        let first = next_noise(&mut random);
+        let second = next_noise(&mut random);
+        let quantized = (f64::from(*sample).clamp(-1.0, 1.0) * scale + first - second)
+            .round()
+            .clamp(-scale, max);
+        *sample = (quantized / scale) as f32;
+    }
+    Ok(())
+}
+
+fn next_noise(state: &mut u64) -> f64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    (*state as f64) / (u64::MAX as f64)
+}
+
+fn compand(
+    audio: &mut AudioBuffer,
+    attack_decay: &[(f32, f32)],
+    transfer_points: &[(f32, f32)],
+    knee_db: f32,
+    gain_db: f32,
+    initial_volume_db: f32,
+    delay_sec: f32,
+) -> Result<()> {
+    let channels = usize::from(audio.spec.channels);
+    if channels == 0 || audio.spec.sample_rate == 0 {
+        bail!("compand requires non-zero sample rate and channel count");
+    }
+    if attack_decay.is_empty()
+        || transfer_points.len() < 2
+        || !knee_db.is_finite()
+        || knee_db < 0.0
+        || !gain_db.is_finite()
+        || !initial_volume_db.is_finite()
+        || !delay_sec.is_finite()
+        || delay_sec < 0.0
+    {
+        bail!("invalid compand parameters");
+    }
+    if attack_decay.iter().any(|(attack, decay)| {
+        !attack.is_finite() || !decay.is_finite() || *attack < 0.0 || *decay < 0.0
+    }) {
+        bail!("compand attack and decay times must be finite and non-negative");
+    }
+    for pair in transfer_points.windows(2) {
+        if pair[0].0 >= pair[1].0 || pair.iter().any(|point| point.1.is_nan()) {
+            bail!("compand input transfer levels must be strictly increasing");
+        }
+    }
+    if transfer_points
+        .iter()
+        .any(|(input, output)| input.is_nan() || output.is_nan())
+    {
+        bail!("compand transfer points cannot contain NaN");
+    }
+
+    let frames = audio.frames();
+    let delay_frames = (f64::from(delay_sec) * f64::from(audio.spec.sample_rate))
+        .round()
+        .min(usize::MAX as f64) as usize;
+    let mut envelope = vec![0.0_f32; audio.samples.len()];
+    let mut state = vec![10.0_f32.powf(initial_volume_db / 20.0); channels];
+    for frame in 0..frames {
+        for channel in 0..channels {
+            let index = frame * channels + channel;
+            let input_level = audio.samples[index].abs();
+            let time = if input_level > state[channel] {
+                attack_decay[channel.min(attack_decay.len() - 1)].0
+            } else {
+                attack_decay[channel.min(attack_decay.len() - 1)].1
+            };
+            let coefficient = if time <= f32::EPSILON {
+                0.0
+            } else {
+                (-1.0 / (time * audio.spec.sample_rate as f32)).exp()
+            };
+            state[channel] = input_level + coefficient * (state[channel] - input_level);
+            envelope[index] = state[channel].max(1.0e-10);
+        }
+    }
+
+    for frame in 0..frames {
+        let control_frame = frame
+            .saturating_add(delay_frames)
+            .min(frames.saturating_sub(1));
+        for channel in 0..channels {
+            let index = frame * channels + channel;
+            let level_db = 20.0 * envelope[control_frame * channels + channel].log10();
+            let output_db = compand_curve(level_db, transfer_points, knee_db) + gain_db;
+            let amplitude_gain = 10.0_f32.powf((output_db - level_db) / 20.0);
+            audio.samples[index] *= amplitude_gain;
+        }
+    }
+    Ok(())
+}
+
+fn compand_curve(level_db: f32, points: &[(f32, f32)], knee_db: f32) -> f32 {
+    let segment = points
+        .windows(2)
+        .position(|pair| level_db <= pair[1].0)
+        .unwrap_or(points.len() - 2);
+    let (x0, y0) = points[segment];
+    let (x1, y1) = points[segment + 1];
+    let slope = compand_slope(x0, y0, x1, y1);
+    let mapped = if x0 == f32::NEG_INFINITY && y0 == f32::NEG_INFINITY {
+        if x1.is_finite() {
+            level_db + (y1 - x1)
+        } else {
+            level_db
+        }
+    } else if x1 == f32::INFINITY && y1 == f32::INFINITY {
+        if x0.is_finite() {
+            level_db + (y0 - x0)
+        } else {
+            level_db
+        }
+    } else if level_db <= x0 {
+        if x0.is_finite() {
+            y0 + slope * (level_db - x0)
+        } else {
+            y0
+        }
+    } else if level_db >= x1 {
+        if x1.is_finite() {
+            y1 + slope * (level_db - x1)
+        } else {
+            y1
+        }
+    } else if x0.is_finite() && x1.is_finite() {
+        y0 + (level_db - x0) * slope
+    } else if x1.is_finite() {
+        y1
+    } else {
+        y0
+    };
+    if knee_db <= 0.0 || !level_db.is_finite() {
+        return mapped;
+    }
+    for window in points.windows(3) {
+        let knee_start = window[1].0 - knee_db * 0.5;
+        let knee_end = window[1].0 + knee_db * 0.5;
+        if level_db >= knee_start && level_db <= knee_end {
+            let t = (level_db - knee_start) / knee_db;
+            let smooth = t * t * (3.0 - 2.0 * t);
+            let left_slope = compand_slope(window[0].0, window[0].1, window[1].0, window[1].1);
+            let right_slope = compand_slope(window[1].0, window[1].1, window[2].0, window[2].1);
+            let left = window[1].1 + left_slope * (level_db - window[1].0);
+            let right = window[1].1 + right_slope * (level_db - window[1].0);
+            return left * (1.0 - smooth) + right * smooth;
+        }
+    }
+    mapped
+}
+
+fn compand_slope(x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
+    if x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite() {
+        (y1 - y0) / (x1 - x0).max(f32::EPSILON)
+    } else if (x0 == f32::NEG_INFINITY && y0 == f32::NEG_INFINITY)
+        || (x1 == f32::INFINITY && y1 == f32::INFINITY)
+    {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+#[derive(Debug)]
+struct CombFilter {
+    buffer: Vec<f32>,
+    index: usize,
+    feedback: f32,
+    damping: f32,
+    filter_store: f32,
+}
+
+impl CombFilter {
+    fn process(&mut self, input: f32) -> f32 {
+        let output = self.buffer[self.index];
+        self.filter_store = output * (1.0 - self.damping) + self.filter_store * self.damping;
+        self.buffer[self.index] = input + self.filter_store * self.feedback;
+        self.index = (self.index + 1) % self.buffer.len();
+        output
+    }
+}
+
+#[derive(Debug)]
+struct AllPassFilter {
+    buffer: Vec<f32>,
+    index: usize,
+}
+
+impl AllPassFilter {
+    fn process(&mut self, input: f32) -> f32 {
+        let buffered = self.buffer[self.index];
+        let output = buffered - input;
+        self.buffer[self.index] = input + buffered * 0.5;
+        self.index = (self.index + 1) % self.buffer.len();
+        output
+    }
+}
+
+fn reverb(audio: &mut AudioBuffer, params: ReverbParameters) -> Result<()> {
+    let ReverbParameters {
+        wet_only,
+        reverberance,
+        hf_damping,
+        room_scale,
+        stereo_depth,
+        pre_delay_ms,
+        wet_gain_db,
+    } = params;
+    if audio.spec.sample_rate == 0 || audio.spec.channels == 0 {
+        bail!("reverb requires non-zero sample rate and channel count");
+    }
+    if audio.samples.is_empty() {
+        return Ok(());
+    }
+    if [reverberance, hf_damping, room_scale, stereo_depth]
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=100.0).contains(value))
+        || !pre_delay_ms.is_finite()
+        || !(0.0..=500.0).contains(&pre_delay_ms)
+        || !wet_gain_db.is_finite()
+    {
+        bail!("reverb parameters are outside their supported ranges");
+    }
+    let channels = usize::from(audio.spec.channels);
+    let input_frames = audio.frames();
+    let rate = audio.spec.sample_rate as f32;
+    let tail_seconds = (0.25 + 2.5 * room_scale / 100.0 * reverberance / 100.0).clamp(0.25, 3.0);
+    let tail_frames = (tail_seconds * rate).round() as usize;
+    let predelay = (pre_delay_ms * rate / 1000.0).round() as usize;
+    let total_frames = input_frames
+        .checked_add(predelay)
+        .and_then(|frames| frames.checked_add(tail_frames))
+        .ok_or_else(|| anyhow::anyhow!("reverb output size overflow"))?;
+    let total_samples = total_frames
+        .checked_mul(channels)
+        .ok_or_else(|| anyhow::anyhow!("reverb output size overflow"))?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(total_samples)?;
+    output.resize(total_samples, 0.0);
+    let wet_gain = 10.0_f32.powf(wet_gain_db / 20.0);
+    let feedback = 0.2 + 0.007 * reverberance;
+    let damping = hf_damping / 100.0 * 0.72;
+    let room_scale = 0.5 + room_scale / 200.0;
+    const COMB_TUNINGS: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
+    const ALLPASS_TUNINGS: [usize; 4] = [556, 441, 341, 225];
+    let mut combs: Vec<Vec<CombFilter>> = Vec::with_capacity(channels);
+    let mut allpasses: Vec<Vec<AllPassFilter>> = Vec::with_capacity(channels);
+    for channel in 0..channels {
+        let side = if channel % 2 == 1 {
+            stereo_depth / 100.0
+        } else {
+            0.0
+        };
+        let spread = side * 23.0 * rate / 44_100.0;
+        combs.push(
+            COMB_TUNINGS
+                .iter()
+                .map(|tuning| {
+                    let len = ((*tuning as f32 * rate / 44_100.0 * room_scale + spread).round()
+                        as usize)
+                        .clamp(1, (audio.spec.sample_rate as usize * 2).max(1));
+                    CombFilter {
+                        buffer: vec![0.0; len],
+                        index: 0,
+                        feedback: feedback.min(0.9),
+                        damping,
+                        filter_store: 0.0,
+                    }
+                })
+                .collect(),
+        );
+        allpasses.push(
+            ALLPASS_TUNINGS
+                .iter()
+                .map(|tuning| {
+                    let len = ((*tuning as f32 * rate / 44_100.0 * room_scale + spread).round()
+                        as usize)
+                        .clamp(1, (audio.spec.sample_rate as usize).max(1));
+                    AllPassFilter {
+                        buffer: vec![0.0; len],
+                        index: 0,
+                    }
+                })
+                .collect(),
+        );
+    }
+
+    for frame in 0..total_frames {
+        for channel in 0..channels {
+            let source_frame = frame.checked_sub(predelay);
+            let dry = source_frame
+                .filter(|source_frame| *source_frame < input_frames)
+                .map(|source_frame| audio.samples[source_frame * channels + channel])
+                .unwrap_or(0.0);
+            let mut wet = 0.0;
+            for comb in &mut combs[channel] {
+                wet += comb.process(dry * 0.015);
+            }
+            wet /= COMB_TUNINGS.len() as f32;
+            for allpass in &mut allpasses[channel] {
+                wet = allpass.process(wet);
+            }
+            let audible_dry = if frame < input_frames {
+                audio.samples[frame * channels + channel]
+            } else {
+                0.0
+            };
+            output[frame * channels + channel] =
+                wet * wet_gain + if wet_only { 0.0 } else { audible_dry };
+        }
+    }
+    audio.samples = output;
+    Ok(())
+}
+
+fn wsola(
+    audio: &mut AudioBuffer,
+    duration_factor: f32,
+    window_ms: f32,
+    search_ms: f32,
+    overlap_ms: f32,
+) -> Result<()> {
+    if !duration_factor.is_finite() || duration_factor <= 0.0 {
+        bail!("stretch/tempo factor must be finite and greater than zero");
+    }
+    if [window_ms, search_ms, overlap_ms]
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+        || window_ms <= 0.0
+        || overlap_ms <= 0.0
+        || overlap_ms >= window_ms
+    {
+        bail!("stretch window/overlap parameters are invalid");
+    }
+    let channels = usize::from(audio.spec.channels);
+    if channels == 0 || audio.spec.sample_rate == 0 {
+        bail!("stretch/tempo requires non-zero sample rate and channel count");
+    }
+    if (duration_factor - 1.0).abs() <= f32::EPSILON || audio.samples.is_empty() {
+        return Ok(());
+    }
+    let input_frames = audio.frames();
+    let target_frames_f = input_frames as f64 * f64::from(duration_factor);
+    if !target_frames_f.is_finite() || target_frames_f > usize::MAX as f64 {
+        bail!("stretch/tempo output length is too large");
+    }
+    let target_frames = (target_frames_f.round() as usize).max(1);
+    let target_samples = target_frames
+        .checked_mul(channels)
+        .ok_or_else(|| anyhow::anyhow!("stretch/tempo output size overflow"))?;
+    if input_frames == 1 {
+        let sample = audio.samples.clone();
+        audio.samples = sample.repeat(target_frames);
+        return Ok(());
+    }
+    let window = ((window_ms * audio.spec.sample_rate as f32 / 1000.0).round() as usize)
+        .clamp(2, input_frames);
+    let overlap = ((overlap_ms * audio.spec.sample_rate as f32 / 1000.0).round() as usize)
+        .clamp(1, window.saturating_sub(1));
+    let hop = window - overlap;
+    let search = (search_ms * audio.spec.sample_rate as f32 / 1000.0).round() as usize;
+    let max_source_start = input_frames.saturating_sub(window);
+    let mut output = Vec::new();
+    output.try_reserve_exact(target_samples)?;
+    output.resize(target_samples, 0.0);
+    let initial = window.min(target_frames);
+    output[..initial * channels].copy_from_slice(&audio.samples[..initial * channels]);
+    let mut output_start = hop;
+    while output_start < target_frames {
+        let predicted = ((output_start as f64 / f64::from(duration_factor)).round() as usize)
+            .min(max_source_start);
+        let low = predicted.saturating_sub(search);
+        let high = predicted.saturating_add(search).min(max_source_start);
+        let reference_end = (output_start + overlap).min(target_frames);
+        let compare_frames = reference_end.saturating_sub(output_start);
+        let mut best_source = predicted;
+        let mut best_score = f64::NEG_INFINITY;
+        for candidate in low..=high {
+            let mut dot = 0.0_f64;
+            let mut ref_energy = 0.0_f64;
+            let mut src_energy = 0.0_f64;
+            for frame in (0..compare_frames).step_by(4) {
+                let out_index = (output_start + frame) * channels;
+                let src_index = (candidate + frame).min(input_frames - 1) * channels;
+                for channel in 0..channels {
+                    let left = f64::from(output[out_index + channel]);
+                    let right = f64::from(audio.samples[src_index + channel]);
+                    dot += left * right;
+                    ref_energy += left * left;
+                    src_energy += right * right;
+                }
+            }
+            let score = if ref_energy <= f64::EPSILON || src_energy <= f64::EPSILON {
+                if candidate == predicted { 0.0 } else { -1.0 }
+            } else {
+                dot / (ref_energy * src_energy).sqrt()
+            };
+            if score > best_score {
+                best_score = score;
+                best_source = candidate;
+            }
+        }
+        let segment_frames = window.min(target_frames - output_start);
+        let blend_frames = overlap.min(segment_frames);
+        for frame in 0..blend_frames {
+            let alpha = (frame + 1) as f32 / (blend_frames + 1) as f32;
+            let out_index = (output_start + frame) * channels;
+            let src_index = (best_source + frame).min(input_frames - 1) * channels;
+            for channel in 0..channels {
+                output[out_index + channel] = output[out_index + channel] * (1.0 - alpha)
+                    + audio.samples[src_index + channel] * alpha;
+            }
+        }
+        for frame in blend_frames..segment_frames {
+            let out_index = (output_start + frame) * channels;
+            let src_index = (best_source + frame).min(input_frames - 1) * channels;
+            output[out_index..out_index + channels]
+                .copy_from_slice(&audio.samples[src_index..src_index + channels]);
+        }
+        output_start = output_start.saturating_add(hop);
+    }
+    audio.samples = output;
+    Ok(())
 }
 
 fn trim(audio: &mut AudioBuffer, start_sec: f32, duration_sec: Option<f32>) -> Result<()> {
@@ -302,6 +934,495 @@ fn highpass(audio: &mut AudioBuffer, hz: f32) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn biquad_filter(
+    audio: &mut AudioBuffer,
+    kind: BiquadKind,
+    hz: f32,
+    width: FilterWidth,
+    gain_db: f32,
+    poles: u8,
+) -> Result<()> {
+    if audio.spec.sample_rate == 0 || audio.spec.channels == 0 {
+        bail!("biquad filters require a non-zero sample rate and channel count");
+    }
+    let nyquist = audio.spec.sample_rate as f32 / 2.0;
+    if !hz.is_finite() || hz <= 0.0 || hz >= nyquist {
+        bail!("filter frequency must be finite and between zero and Nyquist ({nyquist} Hz)");
+    }
+    if !gain_db.is_finite() {
+        bail!("filter gain must be finite");
+    }
+    if poles == 1 {
+        return match kind {
+            BiquadKind::LowPass => lowpass(audio, hz),
+            BiquadKind::HighPass => highpass(audio, hz),
+            _ => bail!("the -1 pole mode is only supported for lowpass and highpass"),
+        };
+    }
+    if poles != 2 {
+        bail!("filter pole count must be 1 or 2");
+    }
+
+    let q = width_to_q(width, hz)?;
+    let w0 = std::f64::consts::TAU * f64::from(hz) / f64::from(audio.spec.sample_rate);
+    let (sin_w0, cos_w0) = w0.sin_cos();
+    let alpha = sin_w0 / (2.0 * f64::from(q));
+    let gain_a = 10.0_f64.powf(f64::from(gain_db) / 40.0);
+    let (b0, b1, b2, a0, a1, a2) = match kind {
+        BiquadKind::LowPass => (
+            (1.0 - cos_w0) / 2.0,
+            1.0 - cos_w0,
+            (1.0 - cos_w0) / 2.0,
+            1.0 + alpha,
+            -2.0 * cos_w0,
+            1.0 - alpha,
+        ),
+        BiquadKind::HighPass => (
+            (1.0 + cos_w0) / 2.0,
+            -(1.0 + cos_w0),
+            (1.0 + cos_w0) / 2.0,
+            1.0 + alpha,
+            -2.0 * cos_w0,
+            1.0 - alpha,
+        ),
+        BiquadKind::BandPass => {
+            let peak_gain = alpha;
+            (
+                peak_gain,
+                0.0,
+                -peak_gain,
+                1.0 + alpha,
+                -2.0 * cos_w0,
+                1.0 - alpha,
+            )
+        }
+        BiquadKind::BandPassConstantSkirt => (
+            sin_w0 / 2.0,
+            0.0,
+            -sin_w0 / 2.0,
+            1.0 + alpha,
+            -2.0 * cos_w0,
+            1.0 - alpha,
+        ),
+        BiquadKind::BandReject => (
+            1.0,
+            -2.0 * cos_w0,
+            1.0,
+            1.0 + alpha,
+            -2.0 * cos_w0,
+            1.0 - alpha,
+        ),
+        BiquadKind::AllPass => (
+            1.0 - alpha,
+            -2.0 * cos_w0,
+            1.0 + alpha,
+            1.0 + alpha,
+            -2.0 * cos_w0,
+            1.0 - alpha,
+        ),
+        BiquadKind::Equalizer => (
+            1.0 + alpha * gain_a,
+            -2.0 * cos_w0,
+            1.0 - alpha * gain_a,
+            1.0 + alpha / gain_a,
+            -2.0 * cos_w0,
+            1.0 - alpha / gain_a,
+        ),
+        BiquadKind::LowShelf | BiquadKind::HighShelf => {
+            let slope = width_to_shelf_slope(width, hz, audio.spec.sample_rate)?;
+            if slope <= 0.0
+                || !slope.is_finite()
+                || (matches!(width, FilterWidth::Slope(_)) && slope > 1.0)
+            {
+                bail!(
+                    "shelf slope must be finite and greater than zero; explicit s widths may not exceed one"
+                );
+            }
+            let shelf_alpha_argument =
+                (gain_a + 1.0 / gain_a) * (1.0 / f64::from(slope) - 1.0) + 2.0;
+            if shelf_alpha_argument < 0.0 || !shelf_alpha_argument.is_finite() {
+                bail!("shelf width and gain produce invalid filter coefficients");
+            }
+            let shelf_alpha = sin_w0 / 2.0 * shelf_alpha_argument.sqrt();
+            let beta = 2.0 * gain_a.sqrt() * shelf_alpha;
+            if matches!(kind, BiquadKind::LowShelf) {
+                (
+                    gain_a * ((gain_a + 1.0) - (gain_a - 1.0) * cos_w0 + beta),
+                    2.0 * gain_a * ((gain_a - 1.0) - (gain_a + 1.0) * cos_w0),
+                    gain_a * ((gain_a + 1.0) - (gain_a - 1.0) * cos_w0 - beta),
+                    (gain_a + 1.0) + (gain_a - 1.0) * cos_w0 + beta,
+                    -2.0 * ((gain_a - 1.0) + (gain_a + 1.0) * cos_w0),
+                    (gain_a + 1.0) + (gain_a - 1.0) * cos_w0 - beta,
+                )
+            } else {
+                (
+                    gain_a * ((gain_a + 1.0) + (gain_a - 1.0) * cos_w0 + beta),
+                    -2.0 * gain_a * ((gain_a - 1.0) + (gain_a + 1.0) * cos_w0),
+                    gain_a * ((gain_a + 1.0) + (gain_a - 1.0) * cos_w0 - beta),
+                    (gain_a + 1.0) - (gain_a - 1.0) * cos_w0 + beta,
+                    2.0 * ((gain_a - 1.0) - (gain_a + 1.0) * cos_w0),
+                    (gain_a + 1.0) - (gain_a - 1.0) * cos_w0 - beta,
+                )
+            }
+        }
+    };
+    if !a0.is_finite() || a0.abs() <= f64::EPSILON {
+        bail!("filter coefficients are not finite");
+    }
+    let (b0, b1, b2, a1, a2) = (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    if [b0, b1, b2, a1, a2]
+        .iter()
+        .any(|coefficient| !coefficient.is_finite())
+    {
+        bail!("filter coefficients are not finite");
+    }
+
+    let channels = usize::from(audio.spec.channels);
+    let mut in1 = vec![0.0_f64; channels];
+    let mut in2 = vec![0.0_f64; channels];
+    let mut out1 = vec![0.0_f64; channels];
+    let mut out2 = vec![0.0_f64; channels];
+    for frame in audio.samples.chunks_exact_mut(channels) {
+        for (channel, sample) in frame.iter_mut().enumerate() {
+            let input = f64::from(*sample);
+            let output = b0 * input + b1 * in1[channel] + b2 * in2[channel]
+                - a1 * out1[channel]
+                - a2 * out2[channel];
+            in2[channel] = in1[channel];
+            in1[channel] = input;
+            out2[channel] = out1[channel];
+            out1[channel] = output;
+            *sample = output as f32;
+        }
+    }
+    Ok(())
+}
+
+fn width_to_q(width: FilterWidth, center_hz: f32) -> Result<f32> {
+    let q = match width {
+        FilterWidth::Hertz(bandwidth) | FilterWidth::HertzNoWarp(bandwidth) => {
+            center_hz / bandwidth
+        }
+        FilterWidth::Kilohertz(bandwidth) => center_hz / (bandwidth * 1000.0),
+        FilterWidth::Octaves(bandwidth) => {
+            let octave_ratio = 2.0_f64.powf(f64::from(bandwidth));
+            (octave_ratio.sqrt() / (octave_ratio - 1.0)) as f32
+        }
+        FilterWidth::Q(q) => q,
+        FilterWidth::Slope(slope) => 1.0 / slope,
+    };
+    if !q.is_finite() || q <= 0.0 {
+        bail!("filter width must be finite and greater than zero");
+    }
+    Ok(q)
+}
+
+fn width_to_shelf_slope(width: FilterWidth, center_hz: f32, sample_rate: u32) -> Result<f32> {
+    if let FilterWidth::Slope(slope) = width {
+        return Ok(slope);
+    }
+    let bandwidth_octaves = match width {
+        FilterWidth::Hertz(bandwidth) | FilterWidth::HertzNoWarp(bandwidth) => {
+            if bandwidth >= 2.0 * center_hz {
+                bail!("shelf bandwidth in Hz must be less than twice its center frequency");
+            }
+            ((center_hz + bandwidth / 2.0) / (center_hz - bandwidth / 2.0)).log2()
+        }
+        FilterWidth::Kilohertz(bandwidth) => {
+            return width_to_shelf_slope(
+                FilterWidth::Hertz(bandwidth * 1000.0),
+                center_hz,
+                sample_rate,
+            );
+        }
+        FilterWidth::Octaves(octaves) => octaves,
+        FilterWidth::Q(q) => {
+            (2.0 * (1.0 / (2.0 * f64::from(q))).asinh() / std::f64::consts::LN_2) as f32
+        }
+        FilterWidth::Slope(_) => unreachable!(),
+    };
+    if !bandwidth_octaves.is_finite() || bandwidth_octaves <= 0.0 {
+        bail!("filter width must be finite and greater than zero");
+    }
+    let omega = std::f64::consts::TAU * f64::from(center_hz) / f64::from(sample_rate);
+    let warped =
+        (std::f64::consts::LN_2 / 2.0) * f64::from(bandwidth_octaves) * omega / omega.sin();
+    let slope = (1.0 / warped.sinh()) as f32;
+    Ok(slope)
+}
+
+fn echo(
+    audio: &mut AudioBuffer,
+    input_gain: f32,
+    output_gain: f32,
+    taps_ms: &[(f32, f32)],
+) -> Result<()> {
+    if !input_gain.is_finite() || !output_gain.is_finite() {
+        bail!("echo gains must be finite");
+    }
+    if taps_ms.is_empty() {
+        bail!("echo requires at least one delay/decay pair");
+    }
+    if audio.spec.channels == 0 || audio.spec.sample_rate == 0 {
+        bail!("echo requires a non-zero channel count and sample rate");
+    }
+
+    let mut taps = Vec::with_capacity(taps_ms.len());
+    for &(delay_ms, decay) in taps_ms {
+        if !delay_ms.is_finite() || delay_ms <= 0.0 {
+            bail!("echo delay must be finite and greater than zero milliseconds");
+        }
+        if !decay.is_finite() || !(0.0..=1.0).contains(&decay) {
+            bail!("echo decay must be between zero and one");
+        }
+        let delay_frames = seconds_to_frames(delay_ms / 1000.0, audio.spec.sample_rate);
+        if delay_frames == 0 {
+            bail!("echo delay is shorter than one sample at this sample rate");
+        }
+        taps.push((delay_frames, decay));
+    }
+
+    let channels = usize::from(audio.spec.channels);
+    let frames = audio.frames();
+    let max_delay = taps.iter().map(|(frames, _)| *frames).max().unwrap_or(0);
+    let output_frames = frames
+        .checked_add(max_delay)
+        .ok_or_else(|| anyhow::anyhow!("echo output is too large"))?;
+    let output_len = output_frames
+        .checked_mul(channels)
+        .ok_or_else(|| anyhow::anyhow!("echo output is too large"))?;
+    let mut output = zeroed_samples(output_len, "echo output")?;
+
+    for (frame_index, frame) in audio.samples.chunks_exact(channels).enumerate() {
+        let dry_index = frame_index * channels;
+        for (channel, &sample) in frame.iter().enumerate() {
+            output[dry_index + channel] += input_gain * sample;
+        }
+        for &(delay_frames, decay) in &taps {
+            let delayed_index = (frame_index + delay_frames) * channels;
+            for (channel, &sample) in frame.iter().enumerate() {
+                output[delayed_index + channel] += decay * sample;
+            }
+        }
+    }
+
+    for sample in &mut output {
+        *sample *= output_gain;
+    }
+    audio.samples = output;
+    Ok(())
+}
+
+fn tremolo(audio: &mut AudioBuffer, speed_hz: f32, depth_percent: f32) -> Result<()> {
+    if !speed_hz.is_finite() || speed_hz <= 0.0 {
+        bail!("tremolo speed must be finite and greater than zero");
+    }
+    if !depth_percent.is_finite() || !(0.0..=100.0).contains(&depth_percent) {
+        bail!("tremolo depth must be between zero and 100 percent");
+    }
+    if audio.spec.sample_rate == 0 {
+        bail!("tremolo requires a non-zero sample rate");
+    }
+
+    let depth = depth_percent / 100.0;
+    let sample_rate = audio.spec.sample_rate as f32;
+    let channels = usize::from(audio.spec.channels);
+    for (frame_index, frame) in audio.samples.chunks_exact_mut(channels).enumerate() {
+        let phase = std::f32::consts::TAU * speed_hz * frame_index as f32 / sample_rate;
+        let amplitude = 1.0 - depth + depth * (0.5 + 0.5 * phase.sin());
+        for sample in frame {
+            *sample *= amplitude;
+        }
+    }
+    Ok(())
+}
+
+fn delay(audio: &mut AudioBuffer, delays_sec: &[f32]) -> Result<()> {
+    if delays_sec.is_empty() {
+        bail!("delay requires at least one channel position");
+    }
+    let channels = usize::from(audio.spec.channels);
+    if channels == 0 || audio.spec.sample_rate == 0 {
+        bail!("delay requires a non-zero channel count and sample rate");
+    }
+    if delays_sec.len() > 1 && delays_sec.len() > channels {
+        bail!("delay has more positions than audio channels");
+    }
+    let mut channel_delays = Vec::with_capacity(channels);
+    for channel in 0..channels {
+        let delay_sec = if delays_sec.len() == 1 {
+            delays_sec[0]
+        } else {
+            delays_sec.get(channel).copied().unwrap_or(0.0)
+        };
+        if !delay_sec.is_finite() || delay_sec < 0.0 {
+            bail!("delay positions must be finite and non-negative");
+        }
+        channel_delays.push(seconds_to_frames(delay_sec, audio.spec.sample_rate));
+    }
+
+    let frames = audio.frames();
+    let max_delay = channel_delays.iter().copied().max().unwrap_or(0);
+    let output_frames = frames
+        .checked_add(max_delay)
+        .ok_or_else(|| anyhow::anyhow!("delayed output is too large"))?;
+    let output_len = output_frames
+        .checked_mul(channels)
+        .ok_or_else(|| anyhow::anyhow!("delayed output is too large"))?;
+    let mut output = zeroed_samples(output_len, "delayed output")?;
+    for (frame_index, frame) in audio.samples.chunks_exact(channels).enumerate() {
+        for (channel, &sample) in frame.iter().enumerate() {
+            let target = (frame_index + channel_delays[channel]) * channels + channel;
+            output[target] = sample;
+        }
+    }
+    audio.samples = output;
+    Ok(())
+}
+
+fn dcshift(audio: &mut AudioBuffer, shift: f32, limiter_gain: Option<f32>) -> Result<()> {
+    if !shift.is_finite() {
+        bail!("dcshift value must be finite");
+    }
+    if limiter_gain.is_some_and(|gain| !gain.is_finite() || !(0.0..1.0).contains(&gain)) {
+        bail!("dcshift limiter gain must be greater than zero and less than one");
+    }
+    let limiter_threshold = limiter_gain.map(|gain| 1.0 - (shift.abs() - gain));
+    for sample in &mut audio.samples {
+        let input = *sample;
+        let shifted = match (shift, limiter_gain, limiter_threshold) {
+            (shift, Some(gain), Some(threshold)) if shift > 0.0 && input > threshold => {
+                let range = 1.0 - threshold;
+                if range > f32::EPSILON {
+                    (input - threshold) * gain / range + threshold + shift
+                } else {
+                    input + shift
+                }
+            }
+            (shift, Some(gain), Some(threshold)) if shift < 0.0 && input < -threshold => {
+                let range = 1.0 - threshold;
+                if range > f32::EPSILON {
+                    (input + threshold) * gain / range - threshold + shift
+                } else {
+                    input + shift
+                }
+            }
+            _ => input + shift,
+        };
+        *sample = shifted.clamp(-1.0, 1.0);
+        if !sample.is_finite() {
+            bail!("dcshift produced a non-finite sample");
+        }
+    }
+    Ok(())
+}
+
+fn downsample(audio: &mut AudioBuffer, factor: u32) -> Result<()> {
+    if factor == 0 {
+        bail!("downsample factor must be greater than zero");
+    }
+    if audio.spec.sample_rate == 0 || factor > audio.spec.sample_rate {
+        bail!("downsample factor must not exceed a non-zero sample rate");
+    }
+    if factor == 1 || audio.samples.is_empty() {
+        if factor > 1 {
+            audio.spec.sample_rate = (audio.spec.sample_rate / factor).max(1);
+        }
+        return Ok(());
+    }
+    let channels = usize::from(audio.spec.channels);
+    let step = usize::try_from(factor).context("downsample factor is too large")?;
+    let output_len = audio
+        .frames()
+        .div_ceil(step)
+        .checked_mul(channels)
+        .ok_or_else(|| anyhow::anyhow!("downsample output is too large"))?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(output_len)
+        .context("not enough memory to downsample audio")?;
+    for frame in audio.samples.chunks_exact(channels).step_by(step) {
+        output.extend_from_slice(frame);
+    }
+    audio.samples = output;
+    audio.spec.sample_rate = (audio.spec.sample_rate / factor).max(1);
+    Ok(())
+}
+
+fn upsample(audio: &mut AudioBuffer, factor: u32) -> Result<()> {
+    if factor == 0 {
+        bail!("upsample factor must be greater than zero");
+    }
+    if audio.spec.sample_rate == 0 {
+        bail!("upsample requires a non-zero sample rate");
+    }
+    let output_rate = audio
+        .spec
+        .sample_rate
+        .checked_mul(factor)
+        .ok_or_else(|| anyhow::anyhow!("upsampled sample rate is too large"))?;
+    if factor == 1 || audio.samples.is_empty() {
+        if factor > 1 {
+            audio.spec.sample_rate = output_rate;
+        }
+        return Ok(());
+    }
+    let channels = usize::from(audio.spec.channels);
+    let factor = usize::try_from(factor).context("upsample factor is too large")?;
+    let output_len = audio
+        .samples
+        .len()
+        .checked_mul(factor)
+        .ok_or_else(|| anyhow::anyhow!("upsample output is too large"))?;
+    let mut output = zeroed_samples(output_len, "upsampled output")?;
+    for (frame_index, frame) in audio.samples.chunks_exact(channels).enumerate() {
+        let target = frame_index * factor * channels;
+        output[target..target + channels].copy_from_slice(frame);
+    }
+    audio.samples = output;
+    audio.spec.sample_rate = output_rate;
+    Ok(())
+}
+
+fn repeat(audio: &mut AudioBuffer, count: u32) -> Result<()> {
+    let repetitions = usize::try_from(count)
+        .context("repeat count is too large")?
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("repeat count is too large"))?;
+    let initial_len = audio.samples.len();
+    let final_len = initial_len
+        .checked_mul(repetitions)
+        .ok_or_else(|| anyhow::anyhow!("repeated audio is too large"))?;
+    audio
+        .samples
+        .try_reserve_exact(final_len.saturating_sub(initial_len))
+        .context("not enough memory to repeat audio")?;
+    for _ in 1..repetitions {
+        audio.samples.extend_from_within(..initial_len);
+    }
+    Ok(())
+}
+
+fn swap(audio: &mut AudioBuffer) -> Result<()> {
+    if audio.spec.channels < 2 {
+        bail!("swap requires at least two audio channels");
+    }
+    let channels = usize::from(audio.spec.channels);
+    for frame in audio.samples.chunks_exact_mut(channels) {
+        frame.swap(0, 1);
+    }
+    Ok(())
+}
+
+fn zeroed_samples(length: usize, description: &str) -> Result<Vec<f32>> {
+    let mut samples = Vec::new();
+    samples
+        .try_reserve_exact(length)
+        .with_context(|| format!("not enough memory for {description}"))?;
+    samples.resize(length, 0.0);
+    Ok(samples)
 }
 
 fn limiter(audio: &mut AudioBuffer, threshold: f32) -> Result<()> {

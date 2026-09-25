@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Build sox release binary and create platform installation packages.
+# Build soundx release binary and create platform installation packages.
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # Get version from Cargo metadata
-VERSION="$(cargo metadata --format-version=1 --no-deps 2>/dev/null | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print([p['version'] for p in pkgs if p['name']=='rust-sox'][0])")"
+VERSION="$(cargo metadata --format-version=1 --no-deps 2>/dev/null | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print([p['version'] for p in pkgs if p['name']=='soundx'][0])")"
 
-echo "=== Packaging sox v$VERSION ==="
+echo "=== Packaging soundx v$VERSION ==="
 
 # Step 1: Build release
 echo ""
 echo "[1/4] Building release binary..."
-cargo build --release
+cargo build --release --locked
 
 # Step 2: Detect target
 RUST_TARGET="$(rustc -vV | sed -n 's/host: //p')"
-ARCHIVE_NAME="sox-${VERSION}-${RUST_TARGET}"
+ARCHIVE_NAME="soundx-${VERSION}-${RUST_TARGET}"
 
 # Step 3: Prepare dist directory
 echo ""
@@ -26,8 +26,9 @@ DIST_DIR="${PROJECT_ROOT}/dist"
 PACKAGE_DIR="${DIST_DIR}/${ARCHIVE_NAME}"
 mkdir -p "${PACKAGE_DIR}/examples"
 
-cp "target/release/sox" "${PACKAGE_DIR}/sox"
+cp "target/release/soundx" "${PACKAGE_DIR}/soundx"
 cp README.md "${PACKAGE_DIR}/"
+cp THIRD_PARTY_NOTICES.md "${PACKAGE_DIR}/"
 [ -f LICENSE-MIT ] && cp LICENSE-MIT "${PACKAGE_DIR}/"
 [ -f LICENSE-LGPL ] && cp LICENSE-LGPL "${PACKAGE_DIR}/"
 cp examples/* "${PACKAGE_DIR}/examples/" 2>/dev/null || true
@@ -43,11 +44,11 @@ echo ""
 echo "[4/4] Generating checksums..."
 CHECKSUM_FILE="${DIST_DIR}/SHA256SUMS.txt"
 cd "${DIST_DIR}"
-sha256sum sox-*.* > "${CHECKSUM_FILE}" 2>/dev/null || true
+sha256sum soundx-*.* > "${CHECKSUM_FILE}" 2>/dev/null || true
 cd "${PROJECT_ROOT}"
 
 echo ""
 echo "=== Package complete ==="
-echo "Binary: target/release/sox"
+echo "Binary: target/release/soundx"
 echo "Package: dist/${ARCHIVE_FILE}"
 echo "Checksums: dist/SHA256SUMS.txt"

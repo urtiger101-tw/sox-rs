@@ -1,0 +1,25 @@
+[package]
+name = "wavicle"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "A pure-Rust WavPack v5 codec: lossless decode and encode of 16/24/32-bit integer and 32-bit float, mono and stereo, bit-exact and verified against the reference."
+repository = "https://github.com/mark-ik/wavicle"
+readme = "README.md"
+keywords = ["wavpack", "audio", "codec", "lossless", "compression"]
+categories = ["multimedia::audio", "compression"]
+exclude = ["design_docs/", "fuzz/", ".github/"]
+
+[features]
+# Decode-first: the default build is the reader (smaller, no encoder). Consumers
+# that write .wv (e.g. Hocket) enable `encode`.
+default = ["decode"]
+decode = []
+encode = []
+
+[dependencies]
+
+[dev-dependencies]
+# The BLAKE3 identity gate mirrors the consumer's media-identity invariant:
+# blake3 over the decoded f32 bytes must survive the round trip.
+blake3 = "1"

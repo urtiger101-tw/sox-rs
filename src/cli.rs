@@ -18,6 +18,12 @@ pub enum Commands {
     Info(InfoArgs),
     /// List built-in format support.
     Formats,
+    /// List available system audio input and output devices.
+    Devices,
+    /// Play an audio file through a system output device.
+    Play(PlayArgs),
+    /// Record audio from a system input device for a fixed duration.
+    Record(RecordArgs),
     /// Convert one input file into one output file.
     Convert(ConvertArgs),
     /// Concatenate WAV files in order.
@@ -43,9 +49,77 @@ pub struct InfoArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct PlayArgs {
+    #[arg(required = true, num_args = 1..)]
+    pub inputs: Vec<PathBuf>,
+    /// Repeat the concatenated input sequence until Ctrl+C.
+    #[arg(long = "loop", alias = "repeat")]
+    pub loop_play: bool,
+    /// Select a device by the name printed by `soundx devices`.
+    #[arg(long)]
+    pub device: Option<String>,
+    /// Request an output sample rate supported by the selected device.
+    #[arg(long, alias = "sample-rate")]
+    pub rate: Option<u32>,
+    /// Request an output channel count supported by the selected device.
+    #[arg(long)]
+    pub channels: Option<u16>,
+}
+
+#[derive(Debug, Args)]
+pub struct RecordArgs {
+    pub output: PathBuf,
+    /// Recording duration in seconds (ignored with --continuous).
+    #[arg(long, default_value_t = 5.0)]
+    pub duration: f64,
+    /// Record until Ctrl+C and stream a 16-bit PCM WAV to disk.
+    #[arg(long)]
+    pub continuous: bool,
+    /// Select a device by the name printed by `soundx devices`.
+    #[arg(long)]
+    pub device: Option<String>,
+    /// Request an input sample rate supported by the selected device.
+    #[arg(long, alias = "sample-rate")]
+    pub rate: Option<u32>,
+    /// Request an input channel count supported by the selected device.
+    #[arg(long)]
+    pub channels: Option<u16>,
+}
+
+#[derive(Debug, Args)]
 pub struct ConvertArgs {
     pub input: PathBuf,
     pub output: PathBuf,
+    /// RAW input sample rate; required when the input extension is .raw.
+    #[arg(long)]
+    pub input_raw_rate: Option<u32>,
+    /// RAW input channel count; required when the input extension is .raw.
+    #[arg(long)]
+    pub input_raw_channels: Option<u16>,
+    /// RAW input sample encoding (default: pcm-s16le).
+    #[arg(long, value_enum)]
+    pub input_raw_encoding: Option<crate::audio::RawEncoding>,
+    /// RAW output sample encoding (default: pcm-s16le).
+    #[arg(long, value_enum)]
+    pub output_raw_encoding: Option<crate::audio::RawEncoding>,
+    /// WAV output depth: 8/16/24/32-bit PCM or 32/64-bit floating point.
+    #[arg(long)]
+    pub bits: Option<u16>,
+    /// Write floating-point WAV (requires --bits 32 or --bits 64).
+    #[arg(long)]
+    pub float: bool,
+    /// Write WAV IMA or Microsoft ADPCM instead of PCM.
+    #[arg(long, value_enum)]
+    pub wav_adpcm: Option<crate::codecs::WavAdpcmEncoding>,
+    /// AIFF output depth: 8, 16, 24, or 32 bits (default: 16).
+    #[arg(long)]
+    pub aiff_bits: Option<u16>,
+    /// Target bitrate for MP3/AAC output, in kilobits per second.
+    #[arg(long, default_value_t = 192)]
+    pub bitrate_kbps: u32,
+    /// AU/SND encoding. Defaults to 16-bit PCM.
+    #[arg(long, value_enum)]
+    pub au_encoding: Option<crate::encode::AuEncoding>,
     #[arg(long)]
     pub gain_db: Option<f32>,
     #[arg(long)]
@@ -357,6 +431,9 @@ fn is_subcommand(value: &str) -> bool {
         value,
         "info"
             | "formats"
+            | "devices"
+            | "play"
+            | "record"
             | "convert"
             | "concat"
             | "mix"

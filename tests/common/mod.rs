@@ -1,4 +1,4 @@
-use rust_sox::audio::{AudioBuffer, AudioSpec};
+use soundx::audio::{AudioBuffer, AudioSpec};
 
 #[allow(dead_code)]
 pub fn test_buffer(frames: usize, channels: u16, sample_rate: u32) -> AudioBuffer {

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use rust_sox::audio::{AudioBuffer, AudioSpec};
-use rust_sox::effects::{Effect, EffectChain};
+use soundx::audio::{AudioBuffer, AudioSpec};
+use soundx::effects::{BiquadKind, Effect, EffectChain, FilterWidth};
 use std::f32::consts::TAU;
 
 mod common;
@@ -389,6 +389,111 @@ fn test_speed_stereo_preserves_channels() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn dither_adds_tpdf_noise_and_quantizes_to_requested_precision() -> Result<()> {
+    let mut buf = constant_buffer(2_000, 1, 48_000, 0.0);
+    EffectChain::new(vec![Effect::Dither { bits: 16 }]).apply(&mut buf)?;
+    assert!(buf.samples.iter().any(|sample| *sample != 0.0));
+    assert!(
+        buf.samples
+            .iter()
+            .all(|sample| ((*sample * 32768.0).round() / 32768.0 - *sample).abs() < 1.0e-7)
+    );
+    Ok(())
+}
+
+#[test]
+fn compand_applies_the_configured_transfer_curve() -> Result<()> {
+    let mut buf = constant_buffer(4_800, 1, 48_000, 0.5);
+    EffectChain::new(vec![Effect::Compand {
+        attack_decay: vec![(0.0, 0.0)],
+        transfer_points: vec![(-80.0, -80.0), (-20.0, -20.0), (0.0, -10.0)],
+        knee_db: 0.0,
+        gain_db: 0.0,
+        initial_volume_db: 0.0,
+        delay_sec: 0.0,
+    }])
+    .apply(&mut buf)?;
+    assert!(
+        buf.peak() > 0.18 && buf.peak() < 0.28,
+        "peak was {}",
+        buf.peak()
+    );
+    Ok(())
+}
+
+#[test]
+fn reverb_adds_a_tail_and_produces_a_wet_signal() -> Result<()> {
+    let mut buf = constant_buffer(500, 1, 8_000, 0.5);
+    EffectChain::new(vec![Effect::Reverb {
+        wet_only: true,
+        reverberance: 70.0,
+        hf_damping: 40.0,
+        room_scale: 80.0,
+        stereo_depth: 100.0,
+        pre_delay_ms: 5.0,
+        wet_gain_db: 0.0,
+    }])
+    .apply(&mut buf)?;
+    assert!(buf.frames() > 500);
+    assert!(buf.samples.iter().any(|sample| sample.abs() > 1.0e-5));
+    Ok(())
+}
+
+#[test]
+fn stretch_and_tempo_change_duration_without_resampling_pitch() -> Result<()> {
+    let sample_rate = 8_000;
+    let mut stretched = AudioBuffer {
+        spec: AudioSpec {
+            sample_rate,
+            channels: 1,
+        },
+        samples: (0..sample_rate as usize)
+            .map(|frame| (TAU * 440.0 * frame as f32 / sample_rate as f32).sin() * 0.5)
+            .collect(),
+    };
+    EffectChain::new(vec![Effect::Stretch {
+        factor: 1.5,
+        window_ms: 40.0,
+        search_ms: 8.0,
+        overlap_ms: 10.0,
+    }])
+    .apply(&mut stretched)?;
+    assert_eq!(stretched.frames(), 12_000);
+    let crossings = stretched
+        .samples
+        .windows(2)
+        .filter(|pair| pair[0] <= 0.0 && pair[1] > 0.0)
+        .count();
+    let measured_hz = crossings as f32 / stretched.duration_seconds() as f32;
+    assert!(
+        (400.0..480.0).contains(&measured_hz),
+        "measured pitch {measured_hz}"
+    );
+
+    let mut tempo = stretched.clone();
+    EffectChain::new(vec![Effect::Tempo {
+        factor: 2.0,
+        quality: soundx::effects::TempoQuality::Quick,
+        segment_ms: 30.0,
+        search_ms: 5.0,
+        overlap_ms: 10.0,
+    }])
+    .apply(&mut tempo)?;
+    assert_eq!(tempo.frames(), 6_000);
+    let tempo_crossings = tempo
+        .samples
+        .windows(2)
+        .filter(|pair| pair[0] <= 0.0 && pair[1] > 0.0)
+        .count();
+    let tempo_hz = tempo_crossings as f32 / tempo.duration_seconds() as f32;
+    assert!(
+        (400.0..480.0).contains(&tempo_hz),
+        "measured tempo pitch {tempo_hz}"
+    );
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Pad
 // ---------------------------------------------------------------------------
@@ -639,9 +744,291 @@ fn test_highpass_high_freq_preserved() -> Result<()> {
 }
 
 #[test]
+fn test_echo_extends_audio_and_applies_multiple_taps() -> Result<()> {
+    let mut audio = AudioBuffer {
+        spec: AudioSpec {
+            sample_rate: 1000,
+            channels: 1,
+        },
+        samples: vec![1.0, 0.0, 0.0, 0.0],
+    };
+    EffectChain::new(vec![Effect::Echo {
+        input_gain: 0.5,
+        output_gain: 1.0,
+        taps_ms: vec![(2.0, 0.25), (4.0, 0.125)],
+    }])
+    .apply(&mut audio)?;
+
+    assert_eq!(audio.samples.len(), 8);
+    assert_eq!(audio.samples[0], 0.5);
+    assert_eq!(audio.samples[2], 0.25);
+    assert_eq!(audio.samples[4], 0.125);
+    Ok(())
+}
+
+#[test]
+fn test_tremolo_applies_stereo_linked_lfo() -> Result<()> {
+    let mut audio = AudioBuffer {
+        spec: AudioSpec {
+            sample_rate: 100,
+            channels: 2,
+        },
+        samples: vec![1.0; 8],
+    };
+    EffectChain::new(vec![Effect::Tremolo {
+        speed_hz: 25.0,
+        depth_percent: 100.0,
+    }])
+    .apply(&mut audio)?;
+
+    assert!((audio.samples[0] - 0.5).abs() < 1e-6);
+    assert!((audio.samples[2] - 1.0).abs() < 1e-6);
+    assert!((audio.samples[4] - 0.5).abs() < 1e-6);
+    assert!(audio.samples[6].abs() < 1e-6);
+    assert_eq!(audio.samples[0], audio.samples[1]);
+    assert_eq!(audio.samples[2], audio.samples[3]);
+    Ok(())
+}
+
+#[test]
+fn test_tremolo_rejects_invalid_depth() {
+    let mut audio = constant_buffer(4, 1, 100, 1.0);
+    let result = EffectChain::new(vec![Effect::Tremolo {
+        speed_hz: 2.0,
+        depth_percent: 101.0,
+    }])
+    .apply(&mut audio);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_delay_offsets_samples_and_extends_the_buffer() -> Result<()> {
+    let mut audio = AudioBuffer {
+        spec: AudioSpec {
+            sample_rate: 1000,
+            channels: 1,
+        },
+        samples: vec![1.0, 2.0],
+    };
+    EffectChain::new(vec![Effect::Delay {
+        delays_sec: vec![0.002],
+    }])
+    .apply(&mut audio)?;
+    assert_eq!(audio.samples, vec![0.0, 0.0, 1.0, 2.0]);
+    Ok(())
+}
+
+#[test]
+fn test_dcshift_applies_shift_and_limits_clipping() -> Result<()> {
+    let mut audio = AudioBuffer {
+        spec: AudioSpec {
+            sample_rate: 1000,
+            channels: 1,
+        },
+        samples: vec![-0.5, 0.5, 1.0],
+    };
+    EffectChain::new(vec![Effect::DcShift {
+        shift: 0.25,
+        limiter_gain: Some(0.1),
+    }])
+    .apply(&mut audio)?;
+    assert!((audio.samples[0] + 0.25).abs() < 1e-6);
+    assert!((audio.samples[1] - 0.75).abs() < 1e-6);
+    assert_eq!(audio.samples[2], 1.0);
+    Ok(())
+}
+
+#[test]
+fn test_downsample_and_upsample_match_sample_insertion_semantics() -> Result<()> {
+    let mut audio = AudioBuffer {
+        spec: AudioSpec {
+            sample_rate: 1000,
+            channels: 1,
+        },
+        samples: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    };
+    EffectChain::new(vec![Effect::Downsample { factor: 2 }]).apply(&mut audio)?;
+    assert_eq!(audio.spec.sample_rate, 500);
+    assert_eq!(audio.samples, vec![1.0, 3.0, 5.0]);
+
+    EffectChain::new(vec![Effect::Upsample { factor: 2 }]).apply(&mut audio)?;
+    assert_eq!(audio.spec.sample_rate, 1000);
+    assert_eq!(audio.samples, vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0]);
+    Ok(())
+}
+
+#[test]
+fn test_repeat_and_swap_preserve_channel_frames() -> Result<()> {
+    let mut audio = AudioBuffer {
+        spec: AudioSpec {
+            sample_rate: 1000,
+            channels: 2,
+        },
+        samples: vec![1.0, 10.0, 2.0, 20.0],
+    };
+    EffectChain::new(vec![Effect::Swap, Effect::Repeat { count: 1 }]).apply(&mut audio)?;
+    assert_eq!(
+        audio.samples,
+        vec![10.0, 1.0, 20.0, 2.0, 10.0, 1.0, 20.0, 2.0]
+    );
+    Ok(())
+}
+
+#[test]
 fn test_highpass_zero_hz_errors() {
     let mut buf = constant_buffer(10, 1, 100, 1.0);
     let result = EffectChain::new(vec![Effect::HighPass { hz: 0.0 }]).apply(&mut buf);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_biquad_lowpass_and_highpass_have_expected_dc_response() -> Result<()> {
+    let width = FilterWidth::Q(0.707);
+    let mut low = constant_buffer(4096, 1, 48_000, 0.25);
+    EffectChain::new(vec![Effect::BiquadFilter {
+        kind: BiquadKind::LowPass,
+        hz: 1000.0,
+        width,
+        gain_db: 0.0,
+        poles: 2,
+    }])
+    .apply(&mut low)?;
+    assert!((low.samples.last().copied().unwrap() - 0.25).abs() < 1e-4);
+
+    let mut high = constant_buffer(4096, 1, 48_000, 0.25);
+    EffectChain::new(vec![Effect::BiquadFilter {
+        kind: BiquadKind::HighPass,
+        hz: 1000.0,
+        width,
+        gain_db: 0.0,
+        poles: 2,
+    }])
+    .apply(&mut high)?;
+    assert!(high.samples.last().copied().unwrap().abs() < 1e-4);
+    Ok(())
+}
+
+#[test]
+fn test_bass_shelf_boosts_dc_and_treble_shelf_preserves_it() -> Result<()> {
+    let mut bass = constant_buffer(8192, 1, 48_000, 0.1);
+    EffectChain::new(vec![Effect::BiquadFilter {
+        kind: BiquadKind::LowShelf,
+        hz: 100.0,
+        width: FilterWidth::Slope(0.5),
+        gain_db: 6.0,
+        poles: 2,
+    }])
+    .apply(&mut bass)?;
+    let expected = 0.1 * 10.0_f32.powf(6.0 / 20.0);
+    assert!((bass.samples.last().copied().unwrap() - expected).abs() < 1e-3);
+
+    let mut treble = constant_buffer(8192, 1, 48_000, 0.1);
+    EffectChain::new(vec![Effect::BiquadFilter {
+        kind: BiquadKind::HighShelf,
+        hz: 3000.0,
+        width: FilterWidth::Slope(0.5),
+        gain_db: 6.0,
+        poles: 2,
+    }])
+    .apply(&mut treble)?;
+    assert!((treble.samples.last().copied().unwrap() - 0.1).abs() < 1e-3);
+    Ok(())
+}
+
+#[test]
+fn test_biquad_equalizer_boosts_the_center_frequency() -> Result<()> {
+    let sample_rate = 48_000;
+    let mut audio = AudioBuffer {
+        spec: AudioSpec {
+            sample_rate,
+            channels: 1,
+        },
+        samples: (0..sample_rate)
+            .map(|index| (TAU * 1000.0 * index as f32 / sample_rate as f32).sin() * 0.1)
+            .collect(),
+    };
+    EffectChain::new(vec![Effect::BiquadFilter {
+        kind: BiquadKind::Equalizer,
+        hz: 1000.0,
+        width: FilterWidth::Q(1.0),
+        gain_db: 6.0,
+        poles: 2,
+    }])
+    .apply(&mut audio)?;
+    let before_rms = ((0..sample_rate as usize)
+        .map(|index| {
+            (TAU * 1000.0 * index as f32 / sample_rate as f32)
+                .sin()
+                .mul_add(0.1, 0.0)
+                .powi(2)
+        })
+        .sum::<f32>()
+        / sample_rate as f32)
+        .sqrt();
+    let after_rms = (audio
+        .samples
+        .iter()
+        .map(|sample| sample * sample)
+        .sum::<f32>()
+        / sample_rate as f32)
+        .sqrt();
+    assert!(after_rms > before_rms * 1.7);
+    Ok(())
+}
+
+#[test]
+fn test_bandpass_modes_follow_peak_and_constant_skirt_gain() -> Result<()> {
+    let sample_rate = 48_000;
+    let make_tone = || AudioBuffer {
+        spec: AudioSpec {
+            sample_rate,
+            channels: 1,
+        },
+        samples: (0..sample_rate)
+            .map(|index| (TAU * 1000.0 * index as f32 / sample_rate as f32).sin() * 0.1)
+            .collect(),
+    };
+    let rms = |samples: &[f32]| {
+        (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
+    };
+    let input_rms = rms(&make_tone().samples);
+    let mut peak = make_tone();
+    EffectChain::new(vec![Effect::BiquadFilter {
+        kind: BiquadKind::BandPass,
+        hz: 1000.0,
+        width: FilterWidth::Q(3.0),
+        gain_db: 0.0,
+        poles: 2,
+    }])
+    .apply(&mut peak)?;
+    let peak_gain = rms(&peak.samples) / input_rms;
+
+    let mut skirt = make_tone();
+    EffectChain::new(vec![Effect::BiquadFilter {
+        kind: BiquadKind::BandPassConstantSkirt,
+        hz: 1000.0,
+        width: FilterWidth::Q(3.0),
+        gain_db: 0.0,
+        poles: 2,
+    }])
+    .apply(&mut skirt)?;
+    let skirt_gain = rms(&skirt.samples) / input_rms;
+    assert!((peak_gain - 1.0).abs() < 0.05);
+    assert!((skirt_gain - 3.0).abs() < 0.1);
+    Ok(())
+}
+
+#[test]
+fn test_biquad_rejects_frequencies_at_or_above_nyquist() {
+    let mut audio = constant_buffer(32, 1, 1000, 0.5);
+    let result = EffectChain::new(vec![Effect::BiquadFilter {
+        kind: BiquadKind::LowPass,
+        hz: 500.0,
+        width: FilterWidth::Q(0.707),
+        gain_db: 0.0,
+        poles: 2,
+    }])
+    .apply(&mut audio);
     assert!(result.is_err());
 }
 
