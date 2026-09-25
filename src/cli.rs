@@ -20,9 +20,9 @@ pub enum Commands {
     Formats,
     /// List available system audio input and output devices.
     Devices,
-    /// Play an audio file through a system output device.
+    /// Preload one or more audio files into memory, then play them in sequence.
     Play(PlayArgs),
-    /// Record audio from a system input device for a fixed duration.
+    /// Record audio for a fixed duration or stream continuous 16-bit WAV audio.
     Record(RecordArgs),
     /// Convert one input file into one output file.
     Convert(ConvertArgs),

@@ -205,6 +205,9 @@ pub fn play_file(args: PlayArgs) -> Result<()> {
 }
 
 pub fn record_file(args: RecordArgs) -> Result<()> {
+    if args.continuous {
+        validate_continuous_wav_output(&args.output)?;
+    }
     if !args.continuous
         && (!args.duration.is_finite() || args.duration <= 0.0 || args.duration > 86_400.0)
     {
@@ -327,14 +330,6 @@ fn record_continuous(
     sample_rate: u32,
     channels: u16,
 ) -> Result<()> {
-    if args
-        .output
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_none_or(|extension| !extension.eq_ignore_ascii_case("wav"))
-    {
-        bail!("continuous recording currently streams 16-bit PCM WAV output only");
-    }
     if let Some(parent) = args
         .output
         .parent()
@@ -439,6 +434,17 @@ fn record_continuous(
         (Ok(written), None) => {
             eprintln!("Saved {written} samples to {}", args.output.display());
         }
+    }
+    Ok(())
+}
+
+fn validate_continuous_wav_output(output: &std::path::Path) -> Result<()> {
+    if output
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case("wav"))
+    {
+        bail!("continuous recording currently streams 16-bit PCM WAV output only");
     }
     Ok(())
 }
@@ -831,6 +837,13 @@ mod tests {
             samples: vec![0.0, 0.0],
         };
         assert!(append_playback_audio(&mut combined, &incompatible).is_err());
+    }
+
+    #[test]
+    fn continuous_recording_requires_wav_output_case_insensitively() {
+        assert!(validate_continuous_wav_output(std::path::Path::new("capture.WAV")).is_ok());
+        assert!(validate_continuous_wav_output(std::path::Path::new("capture.mp3")).is_err());
+        assert!(validate_continuous_wav_output(std::path::Path::new("capture")).is_err());
     }
 
     #[test]

@@ -55,10 +55,10 @@ fn run() -> Result<()> {
 
 fn run_formats() -> Result<()> {
     println!(
-        "read: wav (PCM, float, IMA/MS ADPCM), gsm (GSM 06.10), amr/awb (AMR-NB/WB), wv (WavPack v5 mono/stereo), aiff, au/snd, raw, flac, mp3, ogg/vorbis, opus, aac, alac, caf, mkv/webm, mp4/m4a"
+        "read: wav (PCM, float, IMA/MS ADPCM), gsm (GSM 06.10), amr/awb (AMR-NB/WB), wv (WavPack v5 lossless mono/stereo), aiff, au/snd, raw, flac, mp3, ogg/vorbis, opus, aac, alac, caf, mkv/webm, mp4/m4a"
     );
     println!(
-        "write: wav (pcm8/16/24/32, float32/64, ima-adpcm, ms-adpcm), gsm (GSM 06.10), amr (AMR-NB), awb (AMR-WB), wv (WavPack v5 mono/stereo float), aiff, flac, mp3, ogg/vorbis, aac/adts, au/snd, raw"
+        "write: wav (pcm8/16/24/32, float32/64, ima-adpcm, ms-adpcm), gsm (GSM 06.10), amr (AMR-NB), awb (AMR-WB), wv (WavPack v5 lossless mono/stereo float), aiff, flac, mp3, ogg/vorbis, aac/adts, au/snd, raw"
     );
     println!("wav: 16-bit PCM by default; convert --bits 8/16/24/32, or --bits 32/64 --float");
     println!(
@@ -69,7 +69,7 @@ fn run_formats() -> Result<()> {
     );
     println!("stream: wav -> wav for gain, fade, and limiter without loading the full file");
     println!(
-        "device: devices, multi-file play, repeat play, and finite/continuous WAV record use CPAL; select device, rate, and channels where supported"
+        "device: devices, in-memory multi-file/repeat play, and finite/continuous WAV record use CPAL; select device, rate, and channels where supported"
     );
     println!(
         "effects: gain, normalize, trim, fade, reverse, speed, stretch, tempo, dither, compand, reverb, pad, silence, lowpass, highpass, bass, treble, allpass, bandpass, bandreject, equalizer, echo, tremolo, delay, dcshift, downsample, upsample, repeat, swap, limiter, rate, channels, stat"

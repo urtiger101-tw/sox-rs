@@ -182,10 +182,39 @@ fn device_commands_expose_rate_and_channel_selection() {
         assert!(help.contains("--channels"), "{command}: {help}");
         if command == "play" {
             assert!(help.contains("--loop"), "{command}: {help}");
+            assert!(
+                help.contains("Preload one or more audio files into memory"),
+                "{command}: {help}"
+            );
         } else {
             assert!(help.contains("--continuous"), "{command}: {help}");
+            assert!(
+                help.contains("continuous 16-bit WAV audio"),
+                "{command}: {help}"
+            );
         }
     }
+}
+
+#[test]
+fn continuous_recording_rejects_non_wav_before_audio_device_access() {
+    let output_path = std::env::temp_dir().join(format!(
+        "soundx-continuous-output-{}.mp3",
+        std::process::id()
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_soundx"))
+        .arg("record")
+        .arg(output_path)
+        .arg("--continuous")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("continuous recording currently streams 16-bit PCM WAV output only"),
+        "unexpected error: {stderr}"
+    );
 }
 
 #[test]
