@@ -89,8 +89,8 @@ soundx convert input.wav lossless.wv
 | 平台 | 套件 | 執行檔 |
 |------|------|--------|
 | Windows x86_64 | `soundx-<version>-setup.exe`（安裝程式）或 `soundx-<version>-x86_64-pc-windows-msvc.zip` | `soundx.exe` |
-| Linux x86_64 | `soundx-<version>-linux.tar.gz` | `soundx` |
-| macOS x86_64 | `soundx-<version>-macos.tar.gz` | `soundx` |
+| Linux x86_64 | `soundx-<version>-x86_64-unknown-linux-gnu.tar.gz` | `soundx` |
+| macOS x86_64 | `soundx-<version>-x86_64-apple-darwin.tar.gz` | `soundx` |
 
 Windows 安裝程式預設會將安裝目錄加入目前使用者的 `PATH`。安裝後開啟新終端機，執行 `soundx --version` 驗證。
 
@@ -153,6 +153,8 @@ cargo build --release
 | **裝置** | 列出系統裝置、多檔/循環播放、定時/連續 WAV 錄音，可選裝置、取樣率與聲道數 |
 
 WavPack 目前支援 v5 lossless 單聲道/立體聲；GSM 與 AMR 使用單聲道語音影格。多檔播放會先將播放清單載入記憶體；連續錄音透過 bounded queue 寫入 16-bit WAV。此專案仍是 SoX 風格子集，格式與效果限制請見[相容性矩陣](../../docs/SOX_COMPATIBILITY.md)。錄音需要可用輸入裝置及作業系統授權。
+
+`play --loop` 會持續到 Ctrl+C，不受單次播放逾時限制。連續錄音抵達 RIFF WAV 約 4 GiB 的上限時會停止、回報錯誤並完成已錄音部分的標頭；目前不支援 RF64。
 
 RAW 輸入需以 `convert --input-raw-rate HZ --input-raw-channels N` 指定取樣率及聲道數，預設使用 `pcm-s16le`；輸出可用 `--output-raw-encoding` 選格式。AU/SND 可用 `convert --au-encoding pcm8|pcm16|pcm24|pcm32|float32|float64|mu-law|a-law` 選擇編碼，預設為 16-bit PCM。
 AIFF 預設 16-bit PCM，可用 `convert --aiff-bits 8|16|24|32` 選擇位元深度。

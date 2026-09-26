@@ -26,6 +26,15 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Source: "{#Root}target\release\soundx.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+#if FileExists(Root + "LICENSE-MIT")
+Source: "{#Root}LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
+#endif
+#if FileExists(Root + "LICENSE-LGPL")
+Source: "{#Root}LICENSE-LGPL"; DestDir: "{app}"; Flags: ignoreversion
+#endif
+Source: "{#Root}docs\*.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "{#Root}pages\en\README.md"; DestDir: "{app}\pages\en"; Flags: ignoreversion
+Source: "{#Root}pages\zh-TW\README.md"; DestDir: "{app}\pages\zh-TW"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\soundx Command Prompt"; Filename: "{cmd}"; Parameters: "/K soundx --help"; WorkingDir: "{app}"; IconFilename: "{app}\soundx.exe"

@@ -2,13 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [main, master]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,7 +18,7 @@ jobs:
   check:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -35,7 +36,7 @@ jobs:
         run: cargo build --locked
 
       - name: Test
-        run: cargo test --locked
+        run: cargo test --locked --all-targets
 
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
@@ -53,7 +54,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-          - os: macOS-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
 
@@ -66,8 +67,32 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
+      - name: Install Linux audio headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+
+      - name: Verify native package architecture
+        run: |
+          ACTUAL_TARGET="$(rustc -vV | sed -n 's/host: //p')"
+          test "$ACTUAL_TARGET" = "${{ matrix.target }}"
+
       - name: Build release
         run: cargo build --release --locked
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+          $compiler = Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $compiler) { throw 'Inno Setup compiler not found' }
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          & $compiler.FullName "/DAppVersion=$version" installer/soundx.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
 
       - name: Create package directory
         run: |
@@ -83,9 +108,10 @@ jobs:
 
           cp README.md "dist/${ARCHIVE_NAME}/"
           cp THIRD_PARTY_NOTICES.md "dist/${ARCHIVE_NAME}/"
+          cp -R docs pages "dist/${ARCHIVE_NAME}/"
           [ -f LICENSE-MIT ] && cp LICENSE-MIT "dist/${ARCHIVE_NAME}/"
           [ -f LICENSE-LGPL ] && cp LICENSE-LGPL "dist/${ARCHIVE_NAME}/"
-          cp examples/* "dist/${ARCHIVE_NAME}/examples/" 2>/dev/null || true
+          cp examples/* "dist/${ARCHIVE_NAME}/examples/"
 
       - name: Create archive (Unix)
         if: runner.os != 'Windows'
@@ -106,24 +132,37 @@ jobs:
       - name: Generate SHA256 checksums
         run: |
           cd dist
-          for f in soundx-*.*; do
-            [ -f "$f" ] && sha256sum "$f" >> SHA256SUMS.txt
-          done
+          shopt -s nullglob
+          ASSETS=(soundx-*.tar.gz soundx-*.zip soundx-*-setup.exe)
+          test "${#ASSETS[@]}" -gt 0
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${ASSETS[@]}" > "SHA256SUMS-${{ matrix.target }}.txt"
+          else
+            shasum -a 256 "${ASSETS[@]}" > "SHA256SUMS-${{ matrix.target }}.txt"
+          fi
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.target }}
-          path: dist/
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*-setup.exe
+            dist/SHA256SUMS-*.txt
           if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [package]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download all packages
         uses: actions/download-artifact@v4
@@ -131,6 +170,12 @@ jobs:
           pattern: package-*
           merge-multiple: true
           path: dist/
+
+      - name: Merge and verify package checksums
+        run: |
+          cat dist/SHA256SUMS-*.txt | sort -k2 > dist/SHA256SUMS.txt
+          cd dist
+          sha256sum --check SHA256SUMS.txt
 
       - name: List packages
         run: ls -lh dist/
@@ -143,8 +188,8 @@ jobs:
             echo "### Downloads"
             echo ""
           } > /tmp/release-notes.md
-          ls dist/ | while IFS= read -r f; do
-            echo "- \`$f\`" >> /tmp/release-notes.md
+          for f in dist/*.tar.gz dist/*.zip dist/*-setup.exe dist/SHA256SUMS.txt; do
+            [ -f "$f" ] && echo "- \`${f##*/}\`" >> /tmp/release-notes.md
           done
           echo "" >> /tmp/release-notes.md
           echo "---" >> /tmp/release-notes.md
@@ -165,7 +210,7 @@ jobs:
         run: |
           cd dist
           ASSETS=()
-          for f in *.tar.gz *.zip SHA256SUMS.txt; do
+          for f in *.tar.gz *.zip *-setup.exe SHA256SUMS.txt; do
             [ -f "$f" ] && ASSETS+=("$f")
           done
 

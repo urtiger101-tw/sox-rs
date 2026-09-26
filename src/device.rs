@@ -138,7 +138,7 @@ pub fn play_file(args: PlayArgs) -> Result<()> {
         ])
         .apply(&mut next)
         .with_context(|| format!("failed to adapt {} for the output device", input.display()))?;
-        append_playback_audio(&mut audio, &next)?;
+        append_playback_audio(&mut audio, next)?;
     }
 
     if audio.samples.is_empty() {
@@ -179,7 +179,7 @@ pub fn play_file(args: PlayArgs) -> Result<()> {
 
     let playback_seconds =
         samples.len() as f64 / (f64::from(output_rate) * f64::from(output_channels));
-    let wait_limit = Duration::from_secs_f64(playback_seconds.min(86_400.0) + 10.0);
+    let wait_limit = playback_wait_limit(playback_seconds, args.loop_play);
     let started = Instant::now();
     while if args.loop_play {
         running.load(Ordering::Acquire)
@@ -189,7 +189,7 @@ pub fn play_file(args: PlayArgs) -> Result<()> {
         if let Some(error) = take_stream_error(&stream_error) {
             bail!("output stream failed: {error}");
         }
-        if started.elapsed() > wait_limit {
+        if wait_limit.is_some_and(|limit| started.elapsed() > limit) {
             bail!("output stream did not consume the requested audio in time");
         }
         thread::sleep(Duration::from_millis(5));
@@ -487,7 +487,11 @@ fn make_continuous_input_stream(
     }
 }
 
-fn append_playback_audio(target: &mut AudioBuffer, next: &AudioBuffer) -> Result<()> {
+fn playback_wait_limit(playback_seconds: f64, loop_play: bool) -> Option<Duration> {
+    (!loop_play).then(|| Duration::from_secs_f64(playback_seconds + 10.0))
+}
+
+fn append_playback_audio(target: &mut AudioBuffer, mut next: AudioBuffer) -> Result<()> {
     if target.spec.sample_rate != next.spec.sample_rate
         || target.spec.channels != next.spec.channels
     {
@@ -501,11 +505,15 @@ fn append_playback_audio(target: &mut AudioBuffer, next: &AudioBuffer) -> Result
     {
         bail!("playback input sample count is not aligned to its channel count");
     }
-    target
-        .samples
-        .try_reserve(next.samples.len())
-        .context("not enough memory to concatenate playback inputs")?;
-    target.samples.extend_from_slice(&next.samples);
+    if target.samples.is_empty() {
+        target.samples = next.samples;
+    } else {
+        target
+            .samples
+            .try_reserve(next.samples.len())
+            .context("not enough memory to concatenate playback inputs")?;
+        target.samples.append(&mut next.samples);
+    }
     Ok(())
 }
 
@@ -515,24 +523,71 @@ fn write_continuous_wav_worker(
     sample_rate: u32,
     channels: u16,
 ) -> Result<u64> {
+    let sample_limit = continuous_wav_sample_limit(channels)?;
     let spec = hound::WavSpec {
         channels,
         sample_rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer = hound::WavWriter::create(&output, spec)
+    let writer = hound::WavWriter::create(&output, spec)
         .with_context(|| format!("failed to create {}", output.display()))?;
+    write_continuous_wav(writer, receiver, sample_limit)
+}
+
+fn continuous_wav_sample_limit(channels: u16) -> Result<u64> {
+    if channels == 0 {
+        bail!("continuous WAV recording requires at least one channel");
+    }
+    // Hound writes a 44-byte PCM header or a 68-byte extensible header.
+    // RIFF's size excludes its first 8 bytes. Reserve the header and stop on
+    // a complete frame before either 32-bit size field can overflow.
+    let riff_header_size = if channels > 2 { 60 } else { 36 };
+    let channels = u64::from(channels);
+    Ok((u64::from(u32::MAX) - riff_header_size) / (2 * channels) * channels)
+}
+
+fn write_continuous_wav<W: std::io::Write + std::io::Seek>(
+    mut writer: hound::WavWriter<W>,
+    receiver: std::sync::mpsc::Receiver<Vec<f32>>,
+    sample_limit: u64,
+) -> Result<u64> {
+    let channels = u64::from(writer.spec().channels);
+    let sample_limit = sample_limit.min(continuous_wav_sample_limit(writer.spec().channels)?);
+    let sample_limit = sample_limit / channels * channels;
     let mut written = 0_u64;
-    while let Ok(samples) = receiver.recv() {
-        for sample in samples {
-            let pcm = crate::audio::quantize_pcm(sample.clamp(-1.0, 1.0), 16) as i16;
-            writer.write_sample(pcm)?;
-            written += 1;
+    let write_result = (|| -> Result<()> {
+        while let Ok(samples) = receiver.recv() {
+            if !(samples.len() as u64).is_multiple_of(channels) {
+                bail!("continuous input sample count is not aligned to its channel count");
+            }
+            let count = (samples.len() as u64).min(sample_limit - written) as u32;
+            if count > 0 {
+                // Reuse Hound's PCM16 buffer and check I/O once per chunk.
+                let mut chunk = writer.get_i16_writer(count);
+                for &sample in &samples[..count as usize] {
+                    let pcm = crate::audio::quantize_pcm(sample.clamp(-1.0, 1.0), 16) as i16;
+                    chunk.write_sample(pcm);
+                }
+                chunk.flush()?;
+                written += u64::from(count);
+            }
+            if u64::from(count) < samples.len() as u64 {
+                bail!("continuous recording reached the RIFF WAV size limit");
+            }
+        }
+        Ok(())
+    })();
+    match (write_result, writer.finalize()) {
+        (Ok(()), Ok(())) => Ok(written),
+        (Err(error), Ok(())) => {
+            Err(error.context(format!("finalized partial WAV with {written} samples")))
+        }
+        (Ok(()), Err(error)) => Err(error).context("failed to finalize continuous WAV"),
+        (Err(error), Err(finalize_error)) => {
+            bail!("{error}; failed to finalize continuous WAV: {finalize_error}")
         }
     }
-    writer.finalize()?;
-    Ok(written)
 }
 
 fn continuous_input_stream<T>(
@@ -560,12 +615,15 @@ where
                     .iter()
                     .map(|sample| f32::from_sample(*sample).clamp(-1.0, 1.0))
                     .collect();
-                if matches!(
-                    sender.try_send(chunk),
-                    Err(TrySendError::Full(_) | TrySendError::Disconnected(_))
-                ) {
-                    overflow.store(true, Ordering::Release);
-                    running.store(false, Ordering::Release);
+                match sender.try_send(chunk) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(_)) => {
+                        overflow.store(true, Ordering::Release);
+                        running.store(false, Ordering::Release);
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        running.store(false, Ordering::Release);
+                    }
                 }
             },
             move |error| {
@@ -685,30 +743,36 @@ where
     T: SizedSample + Sample + FromSample<f32>,
 {
     let error_state = stream_error.clone();
+    let mut position = 0;
     device
         .build_output_stream::<T, _, _>(
             config,
             move |output, _| {
-                let start = cursor.fetch_add(output.len(), Ordering::Relaxed);
-                for (index, target) in output.iter_mut().enumerate() {
-                    let sample_index = start.saturating_add(index);
-                    let sample_index = if loop_play {
-                        sample_index % samples.len()
-                    } else {
-                        sample_index
-                    };
-                    let value = samples
-                        .get(sample_index)
-                        .copied()
-                        .unwrap_or(0.0)
-                        .clamp(-1.0, 1.0);
-                    *target = T::from_sample(value);
-                }
+                fill_playback_buffer(output, &samples, &mut position, loop_play);
+                cursor.store(position, Ordering::Relaxed);
             },
             move |error| set_stream_error(&error_state, error.to_string()),
             None,
         )
         .context("failed to create output audio stream")
+}
+
+fn fill_playback_buffer<T: Sample + FromSample<f32>>(
+    output: &mut [T],
+    samples: &[f32],
+    position: &mut usize,
+    loop_play: bool,
+) {
+    for target in output {
+        if loop_play && *position == samples.len() {
+            *position = 0;
+        }
+        let value = samples.get(*position).copied().unwrap_or(0.0);
+        *target = T::from_sample(value.clamp(-1.0, 1.0));
+        if *position < samples.len() {
+            *position += 1;
+        }
+    }
 }
 
 fn make_input_stream(
@@ -815,6 +879,139 @@ mod tests {
     }
 
     #[test]
+    fn repeated_playback_has_no_single_pass_deadline() {
+        assert_eq!(playback_wait_limit(0.05, true), None);
+        assert_eq!(
+            playback_wait_limit(0.05, false),
+            Some(Duration::from_millis(10_050))
+        );
+        assert_eq!(
+            playback_wait_limit(90_000.0, false),
+            Some(Duration::from_secs(90_010))
+        );
+    }
+
+    #[test]
+    fn playback_wraps_across_callbacks_without_an_unbounded_cursor() {
+        let samples = [0.1, 0.2, 0.3, 0.4];
+        let mut position = 0;
+        let mut first = [0.0_f32; 6];
+        fill_playback_buffer(&mut first, &samples, &mut position, true);
+        assert_eq!(first, [0.1, 0.2, 0.3, 0.4, 0.1, 0.2]);
+        let mut second = [0.0_f32; 4];
+        fill_playback_buffer(&mut second, &samples, &mut position, true);
+        assert_eq!(second, [0.3, 0.4, 0.1, 0.2]);
+        assert_eq!(position, 2);
+    }
+
+    #[test]
+    fn finite_and_empty_playback_fill_the_remaining_buffer_with_silence() {
+        let mut position = 0;
+        let mut output = [0.0_f32; 4];
+        fill_playback_buffer(&mut output, &[-2.0, 2.0], &mut position, false);
+        assert_eq!(output, [-1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(position, 2);
+        fill_playback_buffer(&mut output, &[-2.0, 2.0], &mut position, false);
+        assert_eq!(output, [0.0; 4]);
+        assert_eq!(position, 2);
+
+        let mut position = 0;
+        let mut unsigned_output = [0_u16; 4];
+        fill_playback_buffer(&mut unsigned_output, &[], &mut position, true);
+        assert_eq!(unsigned_output, [32_768; 4]);
+        assert_eq!(position, 0);
+    }
+
+    #[test]
+    fn playlist_accepts_the_first_track_into_an_empty_buffer() {
+        let spec = AudioSpec {
+            sample_rate: 48_000,
+            channels: 2,
+        };
+        let mut combined = AudioBuffer {
+            spec,
+            samples: Vec::new(),
+        };
+        append_playback_audio(
+            &mut combined,
+            AudioBuffer {
+                spec,
+                samples: vec![0.1, 0.2],
+            },
+        )
+        .unwrap();
+        assert_eq!(combined.samples, [0.1, 0.2]);
+        assert!(
+            append_playback_audio(
+                &mut combined,
+                AudioBuffer {
+                    spec,
+                    samples: vec![0.3]
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(combined.samples, [0.1, 0.2]);
+    }
+
+    #[test]
+    fn continuous_wav_limit_reserves_the_header_and_complete_frames() {
+        for channels in [1_u16, 2, 6] {
+            let limit = continuous_wav_sample_limit(channels).unwrap();
+            let header = if channels > 2 { 60 } else { 36 };
+            assert!(limit.is_multiple_of(u64::from(channels)));
+            assert!(limit * 2 + header <= u64::from(u32::MAX));
+            assert!((limit + u64::from(channels)) * 2 + header > u64::from(u32::MAX));
+        }
+        assert!(continuous_wav_sample_limit(0).is_err());
+    }
+
+    #[test]
+    fn continuous_wav_keeps_a_readable_prefix_on_size_or_alignment_errors() {
+        for (chunks, limit, expected_samples, message) in [
+            (
+                vec![vec![0.5; 4], vec![0.25; 4]],
+                6,
+                6,
+                "RIFF WAV size limit",
+            ),
+            (vec![vec![0.5; 4], vec![0.25; 3]], 100, 4, "not aligned"),
+        ] {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            let writer = hound::WavWriter::new(
+                &mut bytes,
+                hound::WavSpec {
+                    channels: 2,
+                    sample_rate: 8_000,
+                    bits_per_sample: 16,
+                    sample_format: hound::SampleFormat::Int,
+                },
+            )
+            .unwrap();
+            let (sender, receiver) = sync_channel(chunks.len());
+            for chunk in chunks {
+                sender.send(chunk).unwrap();
+            }
+            drop(sender);
+            let error = write_continuous_wav(writer, receiver, limit).unwrap_err();
+            assert!(format!("{error:#}").contains(message), "{error:#}");
+            let bytes = bytes.into_inner();
+            let riff_size = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+            assert_eq!(riff_size as usize + 8, bytes.len());
+            let reader = hound::WavReader::new(std::io::Cursor::new(bytes)).unwrap();
+            assert_eq!(reader.duration(), expected_samples / 2);
+            assert_eq!(
+                reader
+                    .into_samples::<i16>()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap()
+                    .len(),
+                expected_samples as usize
+            );
+        }
+    }
+
+    #[test]
     fn multi_file_playback_concatenates_aligned_device_buffers() {
         let mut combined = AudioBuffer {
             spec: AudioSpec {
@@ -827,7 +1024,7 @@ mod tests {
             spec: combined.spec,
             samples: vec![0.3, 0.4, 0.5, 0.6],
         };
-        append_playback_audio(&mut combined, &next).unwrap();
+        append_playback_audio(&mut combined, next).unwrap();
         assert_eq!(combined.samples, vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
         let incompatible = AudioBuffer {
             spec: AudioSpec {
@@ -836,7 +1033,7 @@ mod tests {
             },
             samples: vec![0.0, 0.0],
         };
-        assert!(append_playback_audio(&mut combined, &incompatible).is_err());
+        assert!(append_playback_audio(&mut combined, incompatible).is_err());
     }
 
     #[test]

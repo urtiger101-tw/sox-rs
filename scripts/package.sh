@@ -29,9 +29,10 @@ mkdir -p "${PACKAGE_DIR}/examples"
 cp "target/release/soundx" "${PACKAGE_DIR}/soundx"
 cp README.md "${PACKAGE_DIR}/"
 cp THIRD_PARTY_NOTICES.md "${PACKAGE_DIR}/"
+cp -R docs pages "${PACKAGE_DIR}/"
 [ -f LICENSE-MIT ] && cp LICENSE-MIT "${PACKAGE_DIR}/"
 [ -f LICENSE-LGPL ] && cp LICENSE-LGPL "${PACKAGE_DIR}/"
-cp examples/* "${PACKAGE_DIR}/examples/" 2>/dev/null || true
+cp examples/* "${PACKAGE_DIR}/examples/"
 
 # Step 4: Create archive
 echo ""
@@ -44,7 +45,17 @@ echo ""
 echo "[4/4] Generating checksums..."
 CHECKSUM_FILE="${DIST_DIR}/SHA256SUMS.txt"
 cd "${DIST_DIR}"
-sha256sum soundx-*.* > "${CHECKSUM_FILE}" 2>/dev/null || true
+shopt -s nullglob
+ASSETS=(soundx-*.tar.gz soundx-*.zip soundx-*-setup.exe)
+if [ -f soundx.exe ]; then
+    ASSETS+=(soundx.exe)
+fi
+test "${#ASSETS[@]}" -gt 0
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${ASSETS[@]}" > "${CHECKSUM_FILE}"
+else
+    shasum -a 256 "${ASSETS[@]}" > "${CHECKSUM_FILE}"
+fi
 cd "${PROJECT_ROOT}"
 
 echo ""

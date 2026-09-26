@@ -145,7 +145,7 @@ soundx/            # ── crate root
     └── ROADMAP.md
 ```
 
-三條處理路徑：
+四條處理路徑：
 1. **AudioBuffer 路徑**：將輸入解碼為 `f32` 交錯樣本，套用效果鏈，依副檔名編碼
 2. **Streaming 路徑**：增量處理 WAV 樣本，適合大檔案
 3. **Synth 路徑**：生成內建波形，重複使用效果鏈與格式編碼器
@@ -155,13 +155,13 @@ soundx/            # ── crate root
 
 ## 安裝包
 
-每個 Release 包含以下平台的靜態連結二進位檔：
+發行流程會產生以下平台的執行檔封裝；裝置功能使用各作業系統的音訊後端：
 
 | 平台 | 格式 |
 |------|------|
 | Windows x86_64 | `soundx-x.y.z-x86_64-pc-windows-msvc.zip`、`soundx-x.y.z-setup.exe` |
-| Linux x86_64 | `soundx-x.y.z-linux.tar.gz`（`soundx`） |
-| macOS x86_64 | `soundx-x.y.z-macos.tar.gz`（`soundx`） |
+| Linux x86_64 | `soundx-x.y.z-x86_64-unknown-linux-gnu.tar.gz`（`soundx`） |
+| macOS x86_64 | `soundx-x.y.z-x86_64-apple-darwin.tar.gz`（`soundx`） |
 
 ### 從原始碼建置
 
@@ -173,6 +173,10 @@ cargo build --release
 Windows 安裝程式會將安裝目錄加入 PATH；預設安裝至目前使用者，安裝精靈亦可選擇系統層級安裝（需管理員權限）。請在安裝後開啟新的終端機，執行 `soundx --version` 驗證。
 
 以 `pwsh -File scripts/package.ps1` 建立 ZIP 與 Inno Setup 安裝程式。Inno Setup 6 或 7 須已安裝。
+
+Linux 建置需安裝 `pkg-config` 與 ALSA 開發套件（Debian/Ubuntu：`sudo apt-get install pkg-config libasound2-dev`）。封裝包含相容性說明、中英文使用文件及第三方授權聲明。
+
+`play --loop` 持續播放到 Ctrl+C；播放清單先載入記憶體，第一個音軌直接移轉緩衝區以減少複製。連續錄音遇到 RIFF WAV 的 4 GiB 上限會停止並回報錯誤，保存完整音框與可讀取的 WAV 標頭；目前不輸出 RF64。
 
 目前提供 SoX 風格的部分命令與效果，尚未達到完整 SoX 格式、效果及參數相容；請以 `soundx --help` 與 `soundx formats` 檢查已實作範圍。
 

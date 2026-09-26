@@ -11,7 +11,9 @@
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$Version = & cargo metadata --format-version=1 --no-deps | ConvertFrom-Json | Select-Object -ExpandProperty packages | Where-Object name -eq "soundx" | Select-Object -ExpandProperty version
+$Metadata = & cargo metadata --manifest-path (Join-Path $ProjectRoot 'Cargo.toml') --format-version=1 --no-deps
+if ($LASTEXITCODE -ne 0) { throw 'Failed to read Cargo package metadata' }
+$Version = $Metadata | ConvertFrom-Json | Select-Object -ExpandProperty packages | Where-Object name -eq "soundx" | Select-Object -ExpandProperty version
 
 Write-Host "=== Packaging soundx v$Version ===" -ForegroundColor Cyan
 
@@ -42,6 +44,8 @@ Copy-Item (Join-Path $ProjectRoot "target\release\$BinaryName") (Join-Path $Dist
 # Copy README and license
 Copy-Item (Join-Path $ProjectRoot "README.md") (Join-Path $PackageDir "README.md") -Force
 Copy-Item (Join-Path $ProjectRoot "THIRD_PARTY_NOTICES.md") (Join-Path $PackageDir "THIRD_PARTY_NOTICES.md") -Force
+Copy-Item (Join-Path $ProjectRoot "docs") $PackageDir -Recurse -Force
+Copy-Item (Join-Path $ProjectRoot "pages") $PackageDir -Recurse -Force
 if (Test-Path (Join-Path $ProjectRoot "LICENSE-MIT")) {
     Copy-Item (Join-Path $ProjectRoot "LICENSE-MIT") (Join-Path $PackageDir "LICENSE-MIT") -Force
 }
@@ -62,6 +66,7 @@ if ($RunningOnWindows) {
 } else {
     $ArchiveFile = "$ArchiveName.tar.gz"
     & tar -czf (Join-Path $DistDir $ArchiveFile) -C $DistDir $ArchiveName
+    if ($LASTEXITCODE -ne 0) { throw 'Archive creation failed' }
 }
 
 # Step 5: Generate checksums

@@ -1,3 +1,13 @@
 /target
 /dist/
 
+# Local agent indexes, runtime files, and task notes.
+/.opencode/memory.db*
+/.opencode/tantivy/
+/.opencode/vectors.usearch
+/.sites-runtime/
+/.agy-staff/
+/findings.md
+/progress.md
+/task_plan.md
+

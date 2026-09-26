@@ -58,6 +58,13 @@ disk until Ctrl+C through a bounded queue; if the writer falls behind, capture
 stops with an error and the partial WAV is finalized. Both finite and continuous
 recording use the selected device, sample rate, and channel configuration.
 
+Continuous recording also stops with an error before RIFF's 32-bit size fields
+overflow (approximately 4 GiB), finalizing the recorded prefix on a complete
+frame. RF64 output is not implemented. PCM16 chunks reuse the writer's buffer.
+Repeated playback has no single-pass deadline; finite playback uses the actual
+playlist duration plus a device timeout allowance, including playlists longer
+than 24 hours.
+
 Device behavior still depends on CPAL and the host OS audio backend. The tool
 does not implement SoX's backend-specific options, device hot switching,
 simultaneous multi-device routing, or full `-d` semantics. Multi-file playback

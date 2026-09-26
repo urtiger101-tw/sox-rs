@@ -91,8 +91,8 @@ Download from [GitHub Releases](https://github.com/stevenke1981/sox-rs/releases)
 | Platform | Package | Binary |
 |----------|---------|--------|
 | Windows x86_64 | `soundx-<version>-setup.exe` (installer) or `soundx-<version>-x86_64-pc-windows-msvc.zip` | `soundx.exe` |
-| Linux x86_64 | `soundx-<version>-linux.tar.gz` | `soundx` |
-| macOS x86_64 | `soundx-<version>-macos.tar.gz` | `soundx` |
+| Linux x86_64 | `soundx-<version>-x86_64-unknown-linux-gnu.tar.gz` | `soundx` |
+| macOS x86_64 | `soundx-<version>-x86_64-apple-darwin.tar.gz` | `soundx` |
 
 The Windows installer adds its installation folder to the current user's `PATH`
 by default. Open a new terminal after installation, then run `soundx --version`.
@@ -156,6 +156,8 @@ cargo build --release
 | **Devices** | List host devices, multi-file and repeat playback, duration-limited or continuous WAV recording, select device/rate/channels |
 
 WavPack currently supports lossless v5 mono/stereo. GSM and AMR use mono speech frames. Multi-file playback buffers the playlist in memory; continuous recording writes 16-bit WAV through a bounded queue. This remains a SoX-style subset; see the [compatibility matrix](../../docs/SOX_COMPATIBILITY.md) for codec/effect limits. Recording needs an available input device and OS permission.
+
+`play --loop` repeats until Ctrl+C without a single-pass timeout. Continuous recording stops with an error at the RIFF WAV size limit (approximately 4 GiB) and finalizes the recorded prefix; RF64 is unsupported.
 
 RAW input needs `convert --input-raw-rate HZ --input-raw-channels N`; its default encoding is `pcm-s16le`. RAW output accepts `--output-raw-encoding` and defaults to the same encoding. AU/SND encoding can be selected with `convert --au-encoding pcm8|pcm16|pcm24|pcm32|float32|float64|mu-law|a-law`; the default is 16-bit PCM.
 AIFF defaults to 16-bit PCM; select 8, 16, 24, or 32 bits with `convert --aiff-bits`.
