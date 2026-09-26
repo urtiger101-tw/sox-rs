@@ -1,15 +1,22 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 #define Root AddBackslash(SourcePath) + "..\"
 
 [Setup]
+#ifdef IntegrationTestRoot
+AppId=soundx.integration-test
+AppName=soundx integration test
+DefaultDirName={#IntegrationTestRoot}\app
+DefaultGroupName=soundx integration test
+#else
 AppId={{D371F55B-EDBB-4CC3-8A15-0D8339467947}
 AppName=soundx
-AppVersion={#AppVersion}
-AppPublisher=soundx
 DefaultDirName={autopf}\soundx
 DefaultGroupName=soundx
+#endif
+AppVersion={#AppVersion}
+AppPublisher=soundx
 OutputDir={#Root}dist
 OutputBaseFilename=soundx-{#AppVersion}-setup
 SetupIconFile={#Root}assets\soundx.ico
@@ -21,6 +28,12 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+
+[Tasks]
+Name: "agent_codex"; Description: "Install soundx Skill and MCP for Codex (current user)"; GroupDescription: "Agent integrations:"; Flags: unchecked
+Name: "agent_claude"; Description: "Install soundx Skill and MCP for Claude Code (current user)"; GroupDescription: "Agent integrations:"; Flags: unchecked
+Name: "agent_opencode"; Description: "Install soundx Skill and MCP for OpenCode (current user)"; GroupDescription: "Agent integrations:"; Flags: unchecked
+Name: "agent_agy"; Description: "Install soundx Skill and MCP for AGY CLI / Antigravity (current user)"; GroupDescription: "Agent integrations:"; Flags: unchecked
 
 [Files]
 Source: "{#Root}target\release\soundx.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -35,6 +48,7 @@ Source: "{#Root}LICENSE-LGPL"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}docs\*.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "{#Root}pages\en\README.md"; DestDir: "{app}\pages\en"; Flags: ignoreversion
 Source: "{#Root}pages\zh-TW\README.md"; DestDir: "{app}\pages\zh-TW"; Flags: ignoreversion
+Source: "{#Root}skills\soundx\SKILL.md"; DestDir: "{app}\skills\soundx"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\soundx Command Prompt"; Filename: "{cmd}"; Parameters: "/K soundx --help"; WorkingDir: "{app}"; IconFilename: "{app}\soundx.exe"
@@ -112,14 +126,51 @@ begin
   Result := RegWriteExpandStringValue(EnvironmentRoot(), EnvironmentKey(), 'Path', Updated);
 end;
 
+function ProfileArguments(): String;
+begin
+#ifdef IntegrationTestRoot
+  Result := ' --home "{#IntegrationTestRoot}\profile"';
+#else
+  Result := '';
+#endif
+end;
+
+procedure InstallAgent(Agent: String);
+var
+  ExitCode: Integer;
+begin
+  if not WizardIsTaskSelected('agent_' + Agent) then Exit;
+  if not Exec(ExpandConstant('{app}\soundx.exe'), 'integrate install --agent ' + Agent + ProfileArguments(),
+    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then begin
+    Log('soundx integration failed for ' + Agent);
+    SuppressibleMsgBox('soundx was installed, but the ' + Agent + ' integration failed. Existing conflicting settings were preserved. Run soundx integrate install --agent ' + Agent + ' in a terminal for details.', mbError, MB_OK, IDOK);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep = ssPostInstall) and not UpdatePath(True) then
-    Log('Failed to add soundx installation directory to PATH');
+  if CurStep = ssPostInstall then begin
+#ifndef IntegrationTestRoot
+    if not UpdatePath(True) then
+      Log('Failed to add soundx installation directory to PATH');
+#endif
+    InstallAgent('codex');
+    InstallAgent('claude');
+    InstallAgent('opencode');
+    InstallAgent('agy');
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ExitCode: Integer;
 begin
-  if CurUninstallStep = usUninstall then
+  if CurUninstallStep = usUninstall then begin
+    if not Exec(ExpandConstant('{app}\soundx.exe'), 'integrate remove --all --only-executable "' + ExpandConstant('{app}\soundx.exe') + '"' + ProfileArguments(),
+      ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+      SuppressibleMsgBox('Some soundx agent integrations could not be removed. Existing or modified user settings were preserved. See the soundx integration manifest in your user profile for the preserved files.', mbInformation, MB_OK, IDOK);
+#ifndef IntegrationTestRoot
     UpdatePath(False);
+#endif
+  end;
 end;

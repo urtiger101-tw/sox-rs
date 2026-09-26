@@ -9,7 +9,16 @@
 
 ---
 
-## 為什麼選擇 sox？
+## Agent 整合與 Windows 音訊控制（v0.2）
+
+安裝程式可分別選擇安裝 Codex、Claude Code、OpenCode、AGY / Antigravity 的
+Skill 與 MCP 設定。內建 stdio server 以 `soundx mcp` 啟動；可攜版可執行
+`soundx integrate install --agent codex` 安裝整合。
+`soundx windows devices`、`endpoint`、`sessions` 以 JSON 提供 Windows 原生
+音訊裝置、主音量／靜音與個別程式的音訊工作階段。
+完整指令見 [Agent 安裝與使用文件](../../docs/AGENT_INTEGRATION.md)。
+
+## 為什麼選擇 soundx？
 
 - **Rust 原生 DSP 與編解碼器** — 系統音訊 I/O 透過 CPAL 使用作業系統音訊後端。
 - **確定性管線** — 所有效果都作用於交錯 `f32` 取樣緩衝區，訊號路徑可預測且可測試。
@@ -25,7 +34,7 @@
 
 ```bash
 # 從原始碼建置
-git clone https://github.com/stevenke1981/sox-rs.git
+git clone https://github.com/urtiger101-tw/sox-rs.git
 cd sox-rs
 cargo build --release
 ./target/release/soundx --help

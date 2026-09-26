@@ -11,7 +11,16 @@ currently a subset and is not fully SoX-compatible.
 
 ---
 
-## Why sox?
+## Agent integration and Windows audio (v0.2)
+
+The Windows installer provides optional Skill and MCP installation for Codex,
+Claude Code, OpenCode and AGY / Antigravity. The built-in stdio server runs with
+`soundx mcp`; portable users can run `soundx integrate install --agent codex`.
+`soundx windows devices`, `endpoint` and `sessions` expose native Windows audio
+devices, master volume/mute and application sessions as JSON.
+See [agent setup and tools](../../docs/AGENT_INTEGRATION.md) for all commands.
+
+## Why soundx?
 
 - **Rust-native DSP and codecs** — system audio I/O uses the host backend through CPAL.
 - **Deterministic pipeline** — all effects operate on an interleaved `f32` sample buffer, making the signal path predictable and testable.
@@ -27,7 +36,7 @@ currently a subset and is not fully SoX-compatible.
 
 ```bash
 # Build from source
-git clone https://github.com/stevenke1981/sox-rs.git
+git clone https://github.com/urtiger101-tw/sox-rs.git
 cd sox-rs
 cargo build --release
 ./target/release/soundx --help

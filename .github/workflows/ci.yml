@@ -111,7 +111,7 @@ jobs:
 
           cp README.md "dist/${ARCHIVE_NAME}/"
           cp THIRD_PARTY_NOTICES.md "dist/${ARCHIVE_NAME}/"
-          cp -R docs pages "dist/${ARCHIVE_NAME}/"
+          cp -R docs pages skills "dist/${ARCHIVE_NAME}/"
           [ -f LICENSE-MIT ] && cp LICENSE-MIT "dist/${ARCHIVE_NAME}/"
           [ -f LICENSE-LGPL ] && cp LICENSE-LGPL "dist/${ARCHIVE_NAME}/"
           cp examples/* "dist/${ARCHIVE_NAME}/examples/"

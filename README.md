@@ -11,7 +11,7 @@
 
 ```bash
 # 從原始碼建置
-git clone https://github.com/stevenke1981/sox-rs.git
+git clone https://github.com/urtiger101-tw/sox-rs.git
 cd sox-rs
 cargo build --release
 ./target/release/soundx --help
@@ -154,6 +154,17 @@ soundx/            # ── crate root
 ---
 
 ## 安裝包
+
+### Agent 與 Windows 音訊控制（0.2）
+
+Windows 安裝程式可勾選安裝 Codex、Claude Code、OpenCode、AGY / Antigravity
+使用的 soundx Skill 與 MCP 設定。既有設定會保留並備份，同名衝突不會被覆寫。
+可攜版可執行 `soundx integrate install --agent codex`（或 `claude`、`opencode`、`agy`）。
+
+`soundx mcp` 直接提供 stdio MCP，讓 agent 轉檔、分析、合成與管理播放／錄音工作；
+`soundx windows devices`、`soundx windows endpoint` 與 `soundx windows sessions`
+提供 Windows Core Audio 裝置及程式音量／靜音控制。所有原生控制回傳 JSON。
+詳細設定、工具參數、移除方式與限制請見 [Agent 整合說明](docs/AGENT_INTEGRATION.md)。
 
 發行流程會產生以下平台的執行檔封裝；裝置功能使用各作業系統的音訊後端：
 

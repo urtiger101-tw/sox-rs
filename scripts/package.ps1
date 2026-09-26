@@ -46,6 +46,7 @@ Copy-Item (Join-Path $ProjectRoot "README.md") (Join-Path $PackageDir "README.md
 Copy-Item (Join-Path $ProjectRoot "THIRD_PARTY_NOTICES.md") (Join-Path $PackageDir "THIRD_PARTY_NOTICES.md") -Force
 Copy-Item (Join-Path $ProjectRoot "docs") $PackageDir -Recurse -Force
 Copy-Item (Join-Path $ProjectRoot "pages") $PackageDir -Recurse -Force
+Copy-Item (Join-Path $ProjectRoot "skills") $PackageDir -Recurse -Force
 if (Test-Path (Join-Path $ProjectRoot "LICENSE-MIT")) {
     Copy-Item (Join-Path $ProjectRoot "LICENSE-MIT") (Join-Path $PackageDir "LICENSE-MIT") -Force
 }

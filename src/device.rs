@@ -86,6 +86,7 @@ pub fn list_devices() -> Result<()> {
 }
 
 pub fn play_file(args: PlayArgs) -> Result<()> {
+    let stop_file = std::env::var_os("SOUNDX_STOP_FILE").map(std::path::PathBuf::from);
     if args.inputs.is_empty() {
         bail!("play requires at least one input file");
     }
@@ -189,6 +190,9 @@ pub fn play_file(args: PlayArgs) -> Result<()> {
         if let Some(error) = take_stream_error(&stream_error) {
             bail!("output stream failed: {error}");
         }
+        if stop_file.as_ref().is_some_and(|path| path.is_file()) {
+            break;
+        }
         if wait_limit.is_some_and(|limit| started.elapsed() > limit) {
             bail!("output stream did not consume the requested audio in time");
         }
@@ -205,6 +209,7 @@ pub fn play_file(args: PlayArgs) -> Result<()> {
 }
 
 pub fn record_file(args: RecordArgs) -> Result<()> {
+    let stop_file = std::env::var_os("SOUNDX_STOP_FILE").map(std::path::PathBuf::from);
     if args.continuous {
         validate_continuous_wav_output(&args.output)?;
     }
@@ -285,6 +290,9 @@ pub fn record_file(args: RecordArgs) -> Result<()> {
     stream.play().context("failed to start input stream")?;
     let wait_limit = Duration::from_secs_f64(args.duration + 10.0);
     while !finished.load(Ordering::Acquire) {
+        if stop_file.as_ref().is_some_and(|path| path.is_file()) {
+            bail!("finite recording stopped before its requested duration; no output written");
+        }
         if let Some(error) = take_stream_error(&stream_error) {
             bail!("input stream failed: {error}");
         }
@@ -330,6 +338,7 @@ fn record_continuous(
     sample_rate: u32,
     channels: u16,
 ) -> Result<()> {
+    let stop_file = std::env::var_os("SOUNDX_STOP_FILE").map(std::path::PathBuf::from);
     if let Some(parent) = args
         .output
         .parent()
@@ -384,6 +393,10 @@ fn record_continuous(
 
     let mut capture_error = None;
     while running.load(Ordering::Acquire) {
+        if stop_file.as_ref().is_some_and(|path| path.is_file()) {
+            running.store(false, Ordering::Release);
+            break;
+        }
         if let Some(error) = take_stream_error(&stream_error) {
             capture_error = Some(format!("input stream failed: {error}"));
             running.store(false, Ordering::Release);

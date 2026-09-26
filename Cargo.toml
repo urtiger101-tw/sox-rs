@@ -1,6 +1,6 @@
 [package]
 name = "soundx"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.91"
 description = "A Rust-first, SoX-inspired audio processor"
@@ -15,7 +15,7 @@ name = "soundx"
 
 [dependencies]
 anyhow = "1.0"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 cpal = "0.18.2"
 ctrlc = "3.4"
 glob = "0.3"
@@ -31,8 +31,13 @@ rusty_mp3 = "0.8.0"
 rusty_vorbis = "0.1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+jsonc-parser = { version = "0.33.2", features = ["cst", "serde"] }
+toml_edit = { version = "0.25", features = ["serde"] }
 symphonia = { version = "0.6.1", features = ["all"] }
 wavicle = { version = "0.1.0", path = "vendor/wavicle", features = ["encode"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem", "Win32_Devices_FunctionDiscovery"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

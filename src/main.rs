@@ -4,13 +4,16 @@ mod codecs;
 mod device;
 mod effects;
 mod encode;
+mod integrations;
 mod io;
+mod mcp;
 mod mix;
 mod parse;
 mod stats;
 mod streaming;
 mod synth;
 mod util;
+mod windows_audio;
 
 use anyhow::{Context, Result, anyhow, bail};
 use audio::AudioBuffer;
@@ -50,6 +53,30 @@ fn run() -> Result<()> {
         Commands::Stream(args) => run_stream(args),
         Commands::Batch(args) => run_batch(args),
         Commands::RunPlan(args) => run_plan(args),
+        Commands::Mcp => mcp::serve(),
+        Commands::Integrate(args) => integrations::run(args),
+        Commands::Windows(args) => {
+            let result = match args.command {
+                cli::WindowsCommand::Devices => windows_audio::endpoints()?,
+                cli::WindowsCommand::Endpoint {
+                    device,
+                    flow,
+                    volume,
+                    mute,
+                } => windows_audio::endpoint(device.as_deref(), &flow, volume, mute)?,
+                cli::WindowsCommand::Sessions { device } => {
+                    windows_audio::sessions(device.as_deref())?
+                }
+                cli::WindowsCommand::Session {
+                    device,
+                    session_id,
+                    volume,
+                    mute,
+                } => windows_audio::session(device.as_deref(), &session_id, volume, mute)?,
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(())
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 # Third-party notices
 
-The `soundx` release includes the following additional pure-Rust codec
-components:
+The `soundx` release includes the following additional pure-Rust codec and
+agent-integration components:
 
 - `rvoip-codec-core` 0.3.10 (`AMR-NB` and `AMR-WB`), MIT License — Copyright
   (c) 2026 RVOIP AUTHORS.
@@ -9,6 +9,11 @@ components:
   (c) 2026 Karpelès Lab Inc.
 - `wavicle` 0.1.0, vendored in `vendor/wavicle`, MIT License — Copyright
   (c) 2026 Mark.
+- `jsonc-parser` 0.33.2, MIT License — Copyright (c) 2020 David Sherret.
+- `toml_edit` 0.25.15+spec-1.1.0, used under its MIT option — Copyright
+  (c) Individual contributors.
+- `windows` 0.62.2, used under its MIT option — Copyright (c) Microsoft
+  Corporation.
 
 ## MIT License
 

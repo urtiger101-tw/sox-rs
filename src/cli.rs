@@ -38,6 +38,99 @@ pub enum Commands {
     Batch(BatchArgs),
     /// Run a repeatable JSON processing plan.
     RunPlan(RunPlanArgs),
+    /// Serve the local Model Context Protocol over stdin/stdout (no network listener).
+    Mcp,
+    /// Install or remove soundx Skill and MCP configuration for an agent.
+    Integrate(IntegrationArgs),
+    /// Windows Core Audio endpoint and per-application volume control (JSON output).
+    Windows(WindowsArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct IntegrationArgs {
+    #[command(subcommand)]
+    pub command: IntegrationCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IntegrationCommand {
+    /// Show supported agent targets and their current integration state.
+    List {
+        /// Override user home, for a portable profile or isolated installation.
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    /// Install both the Skill and stdio MCP entry. Existing unrelated settings are preserved.
+    Install {
+        #[arg(long, value_enum)]
+        agent: AgentTarget,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    /// Remove only unchanged soundx-managed files and MCP entries.
+    Remove {
+        #[arg(
+            long,
+            value_enum,
+            required_unless_present = "all",
+            conflicts_with = "all"
+        )]
+        agent: Option<AgentTarget>,
+        #[arg(long)]
+        all: bool,
+        /// Only remove registrations referring to this executable (used by the uninstaller).
+        #[arg(long)]
+        only_executable: Option<PathBuf>,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AgentTarget {
+    Codex,
+    Claude,
+    Opencode,
+    Agy,
+}
+
+#[derive(Debug, Args)]
+pub struct WindowsArgs {
+    #[command(subcommand)]
+    pub command: WindowsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WindowsCommand {
+    /// List active Core Audio endpoints, defaults, volume and mute state.
+    Devices,
+    /// Read volume/mute, or supply --volume/--mute to set and read back.
+    Endpoint {
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value = "output", value_parser = ["input", "output"])]
+        flow: String,
+        /// Volume percentage, 0 through 100.
+        #[arg(long)]
+        volume: Option<f32>,
+        #[arg(long, action = clap::ArgAction::Set)]
+        mute: Option<bool>,
+    },
+    /// List audio sessions on the selected output endpoint.
+    Sessions {
+        #[arg(long)]
+        device: Option<String>,
+    },
+    /// Read or adjust a session selected by its exact session instance id.
+    Session {
+        session_id: String,
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long)]
+        volume: Option<f32>,
+        #[arg(long, action = clap::ArgAction::Set)]
+        mute: Option<bool>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -441,6 +534,9 @@ fn is_subcommand(value: &str) -> bool {
             | "stream"
             | "batch"
             | "run-plan"
+            | "mcp"
+            | "integrate"
+            | "windows"
             | "help"
     )
 }
